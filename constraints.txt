@@ -1,0 +1,221 @@
+# You should not normally edit this file by hand.
+alabaster==1.0.0
+    # via sphinx
+auditwheel==6.2.0 ; sys_platform == 'linux'
+babel==2.17.0
+    # via sphinx
+beautifulsoup4==4.13.3
+    # via sphinx-material
+boto3==1.36.21
+    # via hostfactory (pyproject.toml)
+botocore==1.36.21
+    # via
+    #   boto3
+    #   s3transfer
+cachetools==5.5.1
+    # via
+    #   google-auth
+    #   tox
+certifi==2025.1.31
+    # via
+    #   kubernetes
+    #   requests
+chardet==5.2.0
+    # via tox
+charset-normalizer==3.4.1
+    # via requests
+click==8.1.8
+    # via
+    #   hostfactory (pyproject.toml)
+    #   typer-slim
+colorama==0.4.6
+    # via
+    #   click
+    #   pytest
+    #   sphinx
+    #   tox
+coverage==7.6.12
+    # via
+    #   hostfactory (pyproject.toml)
+    #   pytest-cov
+css-html-js-minify==2.5.5
+    # via sphinx-material
+distlib==0.3.9
+    # via virtualenv
+docutils==0.21.2
+    # via sphinx
+durationpy==0.9
+    # via kubernetes
+filelock==3.17.0
+    # via
+    #   tox
+    #   virtualenv
+google-auth==2.38.0
+    # via kubernetes
+hatchling==1.27.0
+    # via hostfactory (pyproject.toml)
+idna==3.10
+    # via requests
+imagesize==1.4.1
+    # via sphinx
+importlib-metadata==8.6.1
+    # via hostfactory (pyproject.toml)
+iniconfig==2.0.0
+    # via pytest
+inotify==0.2.10
+    # via hostfactory (pyproject.toml)
+jinja2==3.1.5
+    # via
+    #   hostfactory (pyproject.toml)
+    #   sphinx
+jmespath==1.0.1
+    # via
+    #   boto3
+    #   botocore
+kubernetes==32.0.0
+    # via hostfactory (pyproject.toml)
+lxml==5.3.1
+    # via sphinx-material
+markdown-it-py==3.0.0
+    # via rich
+markupsafe==3.0.2
+    # via jinja2
+mdurl==0.1.2
+    # via markdown-it-py
+mypy==1.15.0
+mypy-extensions==1.0.0
+    # via mypy
+nose==1.3.7
+    # via inotify
+oauthlib==3.2.2
+    # via
+    #   kubernetes
+    #   requests-oauthlib
+packaging==24.2
+    # via
+    #   auditwheel
+    #   hatchling
+    #   pyproject-api
+    #   pytest
+    #   sphinx
+    #   tox
+    #   tox-uv
+pathspec==0.12.1
+    # via hatchling
+platformdirs==4.3.6
+    # via
+    #   tox
+    #   virtualenv
+pluggy==1.5.0
+    # via
+    #   hatchling
+    #   pytest
+    #   tox
+pyasn1==0.6.1
+    # via
+    #   pyasn1-modules
+    #   rsa
+pyasn1-modules==0.4.1
+    # via google-auth
+pyelftools==0.31 ; sys_platform == 'linux'
+    # via auditwheel
+pygments==2.19.1
+    # via
+    #   rich
+    #   sphinx
+pyproject-api==1.9.0
+    # via tox
+pytest==8.3.4
+    # via
+    #   hostfactory (pyproject.toml)
+    #   pytest-cov
+pytest-cov==6.0.0
+    # via
+    #   hostfactory (pyproject.toml)
+python-dateutil==2.9.0.post0
+    # via
+    #   botocore
+    #   kubernetes
+python-slugify==8.0.4
+    # via sphinx-material
+pyyaml==6.0.2
+    # via
+    #   hostfactory (pyproject.toml)
+    #   kubernetes
+requests==2.32.3
+    # via
+    #   kubernetes
+    #   requests-oauthlib
+    #   sphinx
+requests-oauthlib==2.0.0
+    # via kubernetes
+rich==13.9.4
+    # via
+    #   hostfactory (pyproject.toml)
+rsa==4.9
+    # via google-auth
+ruff==0.9.6
+s3transfer==0.11.2
+    # via boto3
+six==1.17.0
+    # via
+    #   kubernetes
+    #   python-dateutil
+snowballstemmer==2.2.0
+    # via sphinx
+soupsieve==2.6
+    # via beautifulsoup4
+sphinx==8.1.3
+    # via sphinx-material
+sphinx-material==0.0.36
+    # via hostfactory (pyproject.toml)
+sphinxcontrib-applehelp==2.0.0
+    # via sphinx
+sphinxcontrib-devhelp==2.0.0
+    # via sphinx
+sphinxcontrib-htmlhelp==2.1.0
+    # via sphinx
+sphinxcontrib-jsmath==1.0.1
+    # via sphinx
+sphinxcontrib-qthelp==2.0.0
+    # via sphinx
+sphinxcontrib-serializinghtml==2.0.0
+    # via sphinx
+text-unidecode==1.3
+    # via python-slugify
+tomli==2.2.1 ; python_full_version <= '3.11'
+    # via coverage
+tomlkit==0.13.2
+tox==4.24.1
+    # via
+    #   tox-uv
+tox-uv==1.23.1
+trove-classifiers==2025.1.15.22
+    # via hatchling
+typer-slim==0.15.1
+typing-extensions==4.12.2
+    # via
+    #   hostfactory (pyproject.toml)
+    #   beautifulsoup4
+    #   mypy
+    #   typer-slim
+typos==1.29.7
+unidecode==1.3.8
+    # via python-slugify
+urllib3==2.3.0
+    # via
+    #   botocore
+    #   kubernetes
+    #   requests
+uv==0.6.0
+    # via
+    #   tox-uv
+virtualenv==20.29.2
+    # via tox
+websocket-client==1.8.0
+    # via kubernetes
+wheel-filename==1.4.2
+wrapt==1.17.2
+    # via hostfactory (pyproject.toml)
+zipp==3.21.0
+    # via importlib-metadata
