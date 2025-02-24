@@ -1,4 +1,3 @@
-# TODO(andreik): there are lots of comments in this file that are MS specific.
 
 [build-system]
 requires = [
