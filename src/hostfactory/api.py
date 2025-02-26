@@ -31,7 +31,7 @@ def _generate_short_uuid():  # noqa: ANN202
         str: A short UUID string of length 12.
     """
     alphabet = string.ascii_lowercase + string.digits
-    return "".join(random.choices(alphabet, k=12))  # noqa: S311
+    return "".join(random.choices(alphabet, k=12))
 
 
 def _resolve_machine_status(pod, is_return_req):  # noqa: ANN202

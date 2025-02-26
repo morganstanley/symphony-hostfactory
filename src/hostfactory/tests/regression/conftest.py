@@ -165,7 +165,7 @@ def run_event_command() -> click.testing.Result:
     )
 
 
-def run_custom_hostfactory_test( # noaq: C901, PLR0912
+def run_custom_hostfactory_test( # noqa: C901, PLR0912
     test_spec: dict,
     run_hostfactory_pods,  # pylint: disable=unused-argument  # noqa: ARG001
     run_hostfactory_machines,  # noqa: ARG001
