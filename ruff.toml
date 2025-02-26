@@ -95,6 +95,7 @@ ignore = [
     "UP006", # temporarily for monorepo migration
     "UP035", # ditto
     "A005",
+    "S311", # We do not do cryptography
 ]
 
 # Very common error that appears not to be covered by existing Ruff filters
