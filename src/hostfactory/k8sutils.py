@@ -1,4 +1,9 @@
+<<<<<<< HEAD
 """Morgan Stanley makes this available to you under the Apache License,
+=======
+"""
+Morgan Stanley makes this available to you under the Apache License,
+>>>>>>> 57b94638be9e09bb9f97feff57bc403ea96ce257
  Version 2.0 (the "License"). You may obtain a copy of the License
  at http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file
  distributed with this work for additional information regarding
