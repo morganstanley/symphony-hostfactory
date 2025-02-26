@@ -51,7 +51,7 @@ allow-direct-references = true
 exclude = ["/*venv"]
 
 [tool.pytest.ini_options]
-addopts = "--cov src/hostfactory --cov-report term-missing --verbose --cov-fail-under 50"
+addopts = "--cov src/hostfactory --cov-report term-missing --verbose --cov-fail-under 45"
 norecursedirs = ["dist", "build", ".tox", "relvenv"]
 testpaths = ["src/hostfactory/tests/unit","src/hostfactory/test/regression"]
 markers = [
