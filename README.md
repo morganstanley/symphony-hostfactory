@@ -64,6 +64,45 @@ Watches hostfactory provider return requests and deletes the pods.
 Watches the kubernetes event loop for new/modified/deleted pods and captures them on disk.
 
 
+## Testing
+
+#### Common Requirements
+
+A python venv containing the necessary dependencies can be created using the following command:
+```
+python -m pip install --upgrade pip
+pip install uv
+uv venv
+uv pip install -r constraints.txt
+source .venv/bin/activate
+```
+
+### Unit tests
+
+#### Running the tests
+
+The unit tests are written using `pytest` and can be run using the following command:
+```
+pytest src/hostfactory/tests/unit
+```
+
+### Integration tests
+
+#### Requirements
+
+In order to test the provider, a Kubernetes cluster should be available with a  valid kube config in any of the standard 
+directories or environment variables.
+
+The workdir which default to /var/tmp/hostfactory also needs to be writable. 
+
+#### Running the tests
+
+The unit tests are written using `pytest` and can be run using the following command:
+```
+pytest src/hostfactory/tests/regression
+```
+
+
 ## Feedback
 
 Please contact hpc-symphony-k8s@morganstanley.com for any questions.
