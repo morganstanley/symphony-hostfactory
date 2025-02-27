@@ -1,8 +1,14 @@
-"""
-Morgan Stanley makes this available to you under the Apache License, Version 2.0 (the "License"). You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
-Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and limitations under the License.
+"""Morgan Stanley makes this available to you under the Apache License, Version 2.0
+(the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed
+with this work for additional information regarding copyright ownership.
+Unless required by applicable law or agreed to in writing, software distributed
+ under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ specific language governing permissions and limitations under the License.
 
-Low level hostfactory API."""
+Low level hostfactory API.
+"""
 
 import json
 import logging
@@ -25,7 +31,7 @@ def _generate_short_uuid():  # noqa: ANN202
         str: A short UUID string of length 12.
     """
     alphabet = string.ascii_lowercase + string.digits
-    return "".join(random.choices(alphabet, k=12))  # noqa: S311
+    return "".join(random.choices(alphabet, k=12))
 
 
 def _resolve_machine_status(pod, is_return_req):  # noqa: ANN202
