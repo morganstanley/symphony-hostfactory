@@ -1,8 +1,14 @@
-"""
-Morgan Stanley makes this available to you under the Apache License, Version 2.0 (the "License"). You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
-Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the License for the specific language governing permissions and limitations under the License.
+"""Morgan Stanley makes this available to you under the Apache License, Version 2.0
+(the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed
+with this work for additional information regarding copyright ownership.
+Unless required by applicable law or agreed to in writing, software distributed
+ under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ specific language governing permissions and limitations under the License.
 
-Common utilities."""
+Common utilities.
+"""
 
 import functools
 import json
@@ -24,7 +30,6 @@ _DecoratedFuncT = TypeVar("_DecoratedFuncT", bound=Callable[..., Any])
 _ExceptionHandler: TypeAlias = (
     "tuple[type[Exception], None | str | Callable[[Exception], str]]"
 )
-
 
 EXIT_CODE_DEFAULT = 1
 
@@ -57,7 +62,7 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 def handle_exceptions(
-    exclist: Sequence[_ExceptionHandler],
+        exclist: Sequence[_ExceptionHandler],
 ) -> Callable[[_DecoratedFuncT], _DecoratedFuncT]:
     """Decorator that will handle exceptions and output friendly messages."""
 
@@ -99,7 +104,7 @@ def handle_exceptions(
 
             except Exception as unhandled:  # pylint: disable=W0703  # noqa: BLE001
                 with tempfile.NamedTemporaryFile(
-                    delete=False, mode="w", encoding="utf-8"
+                        delete=False, mode="w", encoding="utf-8"
                 ) as f:  # noqa: PLR1704
                     traceback.print_exc(file=f)
                     click.echo(
