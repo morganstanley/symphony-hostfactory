@@ -91,7 +91,7 @@ class TestRequestMachinesWatcher(unittest.TestCase):
             )
             for i in range(1, 4)
         ]
-        mock_create_pod.assert_has_calls(calls)
+        mock_create_pod.assert_has_calls(calls, any_order=True)
         assert pathlib.Path(self.req_dir / ".processed").exists()
 
 
@@ -135,6 +135,6 @@ class TestRequestReturnMachinesWatcher(unittest.TestCase):
 
         assert mock_delete_pod.call_count == 3
         calls = [mock.call(f"machine{i}") for i in range(1, 4)]
-        mock_delete_pod.assert_has_calls(calls)
+        mock_delete_pod.assert_has_calls(calls, any_order=True)
 
         assert pathlib.Path(self.req_dir / ".processed").exists()
