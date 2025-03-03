@@ -1,14 +1,14 @@
-"""Morgan Stanley makes this available to you under the Apache License, Version 2.0
-(the "License"). You may obtain a copy of the License at
-http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed
-with this work for additional information regarding copyright ownership.
-Unless required by applicable law or agreed to in writing, software distributed
- under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- CONDITIONS OF ANY KIND, either express or implied.  See the License for the
- specific language governing permissions and limitations under the License.
-
-Watch and manage hostfactory machine requests
-and pods in a Kubernetes cluster.
+"""Morgan Stanley makes this available to you under the Apache License,
+Version 2.0 (the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file
+distributed with this work for additional information regarding
+copyright ownership. Unless required by applicable law or agreed
+to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+See the License for the specific language governing permissions and
+limitations under the License. Watch and manage hostfactory machine
+requests and pods in a Kubernetes cluster.
 
 Functions:
 - watch_requests(workdir, pod_spec): Watch for machine requests
@@ -25,6 +25,7 @@ import os
 import pathlib
 import tempfile
 import time
+from typing import Callable
 
 import inotify.adapters
 import kubernetes
@@ -37,7 +38,7 @@ from hostfactory import k8sutils
 logger = logging.getLogger(__name__)
 
 _HF_K8S_LABEL_KEY = "symphony/hostfactory-reqid"
-_POD_SPEC = None
+K8S_NOT_FOUND_CODE = 404
 
 
 def _process_pending_events(dirname, on_event) -> None:
@@ -84,7 +85,7 @@ def _create_pod(machine, workdir, pod_spec) -> None:
     """Create pod."""
     logger.info("Creating pod for request: %s", machine.name)
     namespace = k8sutils.get_namespace()
-    with open(pod_spec, encoding="utf-8") as file:  # noqa: PTH123
+    with pathlib.Path(pod_spec).open("r") as file:
         pod_tpl = yaml.safe_load(file)
 
     req_id = machine.parent.name
@@ -112,22 +113,26 @@ def _delete_pod(pod_name) -> None:
             pod_name, namespace, body=kubernetes.client.V1DeleteOptions()
         )
     except kubernetes.client.rest.ApiException as exc:
-        if exc.status == 404:  # noqa: PLR2004
+        if exc.status == K8S_NOT_FOUND_CODE:
             # Assume the pod is already deleted if not found
             logger.exception("Pod not found: %s", pod_name)
 
 
-def _create_machine(request_dir, machine, pod_spec) -> None:
+def _create_machine(request_dir, machine) -> None:
     """Create machine."""
     logger.info("Create machine: %s", machine)
     #
     # machine is a symlink to the podfile. Try open it, if it fails it
     # means that pod is not created yet.
+    podspec_path = pathlib.Path(request_dir) / ".podspec"
     podfile = pathlib.Path(request_dir) / machine
-    try:
-        with open(podfile, encoding="utf8") as _f:  # noqa: PTH123
-            pass
-    except FileNotFoundError:
+
+    # Assumes validation is done and podsepc file exists
+    # with correct path in the request directory.
+    with podspec_path.open("r") as file:
+        pod_spec = pathlib.Path(file.read())
+
+    if not podfile.exists():
         logger.info("Pod file does not exist: %s", podfile)
         workdir = request_dir.parent
         _create_pod(machine, workdir, pod_spec)
@@ -139,7 +144,7 @@ def _return_machine(request_dir, machine) -> None:
     podfile = pathlib.Path(request_dir) / machine_name
 
     try:
-        with open(podfile, encoding="utf8") as file:  # noqa: PTH123
+        with podfile.open("r") as file:
             pod = json.load(file)
             if pod["status"]["phase"].lower() in ["failed", "unknown"]:
                 pass
@@ -153,18 +158,14 @@ def _return_machine(request_dir, machine) -> None:
         logger.error("Pod file does not exist: %s", podfile)
 
 
-def _make_process_machine_requests(pod_spec):  # noqa: ANN202
-    """Create a handler for machine requests."""
-
-    def _process_machine_request(dirname, filename) -> None:
-        """Process machine request."""
-        logger.info("Processing machine request: %s", filename)
-        request_dir = pathlib.Path(dirname) / filename
-        for machine in request_dir.iterdir():
-            logger.info("Create machine: %s", machine)
-            _create_machine(request_dir, machine, pod_spec)
-
-    return _process_machine_request
+def _process_machine_request(dirname, filename) -> None:
+    """Process machine request."""
+    logger.info("Processing machine request: %s", filename)
+    request_dir = pathlib.Path(dirname) / filename
+    for machine in request_dir.iterdir():
+        if machine.name.startswith("."):
+            continue
+        _create_machine(request_dir, machine)
 
 
 def _process_return_machine_request(dirname, filename) -> None:
@@ -172,15 +173,14 @@ def _process_return_machine_request(dirname, filename) -> None:
     logger.info("Processing return machine request: %s", filename)
     request_dir = pathlib.Path(dirname) / filename
     for machine in request_dir.iterdir():
-        logger.info("Return machine: %s", machine)
         _return_machine(request_dir, machine)
 
 
-def watch_requests(workdir, pod_spec) -> None:
+def watch_requests(workdir) -> None:
     """Watch for machine requests."""
     dirname = pathlib.Path(workdir) / "requests"
     dirname.mkdir(parents=True, exist_ok=True)
-    _watch_dir(str(dirname), _make_process_machine_requests(pod_spec))
+    _watch_dir(str(dirname), _process_machine_request)
 
 
 def watch_return_requests(workdir) -> None:
@@ -190,9 +190,9 @@ def watch_return_requests(workdir) -> None:
     _watch_dir(str(dirname), _process_return_machine_request)
 
 
-def _put_event_data(eventdir, data):  # noqa: ANN202
+def _put_event_data(eventdir, data) -> pathlib.Path:
     """Upsert event metadata to the eventdir."""
-    event_filepath = os.path.join(eventdir, data.metadata.name)  # noqa: PTH118
+    event_filepath = pathlib.Path(eventdir, data.metadata.name)
 
     with tempfile.NamedTemporaryFile(delete=False, dir=eventdir) as tf:
         tf.write(
@@ -201,7 +201,7 @@ def _put_event_data(eventdir, data):  # noqa: ANN202
             ).encode("utf-8")
         )
     temp_filepath = tf.name
-    os.rename(temp_filepath, event_filepath)  # noqa: PTH104
+    pathlib.Path(temp_filepath).rename(event_filepath)
 
     return event_filepath
 
@@ -226,7 +226,7 @@ def watch_nodes(workdir) -> None:
     )
 
 
-def _make_event_handler(eventdir, db_handler):  # noqa: ANN202
+def _make_event_handler(eventdir, db_handler) -> Callable[[dict], None]:
     """Create a handler for events."""
 
     def _handler(event: dict) -> None:

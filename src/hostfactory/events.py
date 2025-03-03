@@ -1,11 +1,14 @@
-"""Morgan Stanley makes this available to you under the Apache License, Version 2.0
-(the "License"). You may obtain a copy of the License at
-http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed
-with this work for additional information regarding copyright ownership.
-Unless required by applicable law or agreed to in writing, software distributed
- under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- CONDITIONS OF ANY KIND, either express or implied.  See the License for the
- specific language governing permissions and limitations under the License.
+"""Morgan Stanley makes this available to you under the Apache License,
+Version 2.0 (the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file
+distributed with this work for additional information regarding
+copyright ownership. Unless required by applicable law or agreed
+to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+See the License for the specific language governing permissions and
+limitations under the License. Watch and manage hostfactory machine
+requests and pods in a Kubernetes cluster.
 
 Process and collect hostfactory events.
 
@@ -26,12 +29,17 @@ import inotify.adapters
 
 from hostfactory.cli import context
 
+logger = logging.getLogger(__name__)
+
 
 def init_events_db() -> None:
     """Initialize database."""
-    dbfile = context.dbfile
+    dbfile = context.GLOBAL.dbfile
 
-    logging.info("Initialize database: %s", dbfile)  # noqa: TID251
+    if dbfile is None:
+        raise ValueError("Database file path is not provided.")
+
+    logger.info("Initialize database: %s", dbfile)
     conn = sqlite3.connect(dbfile)
     cursor = conn.cursor()
 
@@ -83,7 +91,7 @@ def init_events_db() -> None:
     )
 
     conn.commit()
-    context.conn = conn
+    context.GLOBAL.conn = conn
 
 
 def event_average(workdir, event_from, event_to):
@@ -115,7 +123,7 @@ def _process_events(path, conn, files) -> None:
 
     def _pod_event(cursor, ev_id, ev_key, ev_value) -> None:
         """Process pod event."""
-        logging.info("Upsert pod: %s %s %s", ev_id, ev_key, ev_value)  # noqa: TID251
+        logger.info("Upsert pod: %s %s %s", ev_id, ev_key, ev_value)
         cursor.execute(
             f"""
             INSERT INTO pods (pod, {ev_key}) VALUES (?, ?)
@@ -128,7 +136,7 @@ def _process_events(path, conn, files) -> None:
     def _node_event(cursor, ev_id, ev_key, ev_value) -> None:
         """Process node event."""
         node, uid = ev_id.split("::")
-        logging.info("Upsert node: %s %s %s %s", node, uid, ev_key, ev_value)  # noqa: TID251
+        logger.info("Upsert node: %s %s %s %s", node, uid, ev_key, ev_value)
         cursor.execute(
             f"""
             INSERT INTO nodes (node, uid, {ev_key}) VALUES (?, ?, ?)
@@ -141,7 +149,7 @@ def _process_events(path, conn, files) -> None:
 
     def _request_event(cursor, ev_id, ev_key, ev_value) -> None:
         """Process request event."""
-        logging.info("Upsert request: %s %s %s", ev_id, ev_key, ev_value)  # noqa: TID251
+        logger.info("Upsert request: %s %s %s", ev_id, ev_key, ev_value)
         cursor.execute(
             f"""
             INSERT INTO requests (request_id, is_return_req, {ev_key})
@@ -154,7 +162,7 @@ def _process_events(path, conn, files) -> None:
 
     def _return_event(cursor, ev_id, ev_key, ev_value) -> None:
         """Process return request event."""
-        logging.info("Upsert return request: %s %s %s", ev_id, ev_key, ev_value)  # noqa: TID251
+        logger.info("Upsert return request: %s %s %s", ev_id, ev_key, ev_value)
         cursor.execute(
             f"""
             INSERT INTO requests (request_id, is_return_req, {ev_key})
@@ -173,12 +181,12 @@ def _process_events(path, conn, files) -> None:
     }
 
     for filename in files:
-        logging.info("Processing event: %s/%s", path, filename)  # noqa: TID251
+        logger.info("Processing event: %s/%s", path, filename)
         ev_type, ev_id, ev_key, ev_value = filename.split("~")
 
         handler = handlers.get(ev_type)
         if not handler:
-            logging.error("Unknown event type: %s", ev_type)  # noqa: TID251
+            logger.error("Unknown event type: %s", ev_type)
             continue
 
         handler(cursor, ev_id, ev_key, ev_value)
@@ -191,16 +199,16 @@ def _process_events(path, conn, files) -> None:
 
 def process_events(watch=True) -> None:
     """Process events."""
-    logging.info("Processing events: %s", context.dirname)  # noqa: TID251
+    logger.info("Processing events: %s", context.GLOBAL.dirname)
 
-    conn = context.conn
+    conn = context.GLOBAL.conn
 
     _process_events(
-        context.dirname,
+        context.GLOBAL.dirname,
         conn,
         [
             filename
-            for filename in os.listdir(str(context.dirname))
+            for filename in os.listdir(str(context.GLOBAL.dirname))
             if not filename.startswith(".")
         ],
     )
@@ -212,7 +220,7 @@ def process_events(watch=True) -> None:
 
     # Add the path to watch
     dirwatch.add_watch(
-        str(context.dirname),
+        str(context.GLOBAL.dirname),
         mask=inotify.constants.IN_CREATE | inotify.constants.IN_MOVED_TO,
     )
 
@@ -229,6 +237,6 @@ def post_events(events) -> None:
     """Post events. "events" is a list of tuples, each tuple is an event."""
     for event in events:
         ev_type, ev_id, ev_key, ev_value = event
-        pathlib.Path(context.dirname).joinpath(
+        pathlib.Path(context.GLOBAL.dirname).joinpath(
             "~".join([ev_type, ev_id, ev_key, str(ev_value)])
         ).touch()
