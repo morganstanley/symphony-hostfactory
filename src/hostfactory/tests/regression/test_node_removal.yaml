@@ -7,4 +7,5 @@
   drain_node: 1
   target:
       list-machines: 5
+      pods: 5
 

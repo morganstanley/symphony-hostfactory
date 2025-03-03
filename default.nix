@@ -34,6 +34,7 @@ let
       pip
       hatchling
       pytest-cov
+      mypy
     ];
 
     nativeCheckInputs = with py.pkgs; [
@@ -48,6 +49,9 @@ let
       jinja2
       typing-extensions
       inotify
+      wrapt
+      rich
+      pydantic
     ];
   };
 in

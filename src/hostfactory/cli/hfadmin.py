@@ -1,11 +1,14 @@
-"""Morgan Stanley makes this available to you under the Apache License, Version 2.0
-(the "License"). You may obtain a copy of the License at
-http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed
-with this work for additional information regarding copyright ownership.
-Unless required by applicable law or agreed to in writing, software distributed
- under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- CONDITIONS OF ANY KIND, either express or implied.  See the License for the
- specific language governing permissions and limitations under the License.
+"""Morgan Stanley makes this available to you under the Apache License,
+Version 2.0 (the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file
+distributed with this work for additional information regarding
+copyright ownership. Unless required by applicable law or agreed
+to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+See the License for the specific language governing permissions and
+limitations under the License. Watch and manage hostfactory machine
+requests and pods in a Kubernetes cluster.
 
 Hostfactory admin CLI.
 """
@@ -20,12 +23,11 @@ from hostfactory import cli
 from hostfactory import events
 from hostfactory.cli import context
 from hostfactory.cli import log_handler
-from hostfactory.cli.hf import HF_K8S_WORKDIR_DEFAULT
 
 logger = logging.getLogger(__name__)
 
 
-def _list_subdirectories_by_creation_time(directory):  # noqa: ANN202
+def _list_subdirectories_by_creation_time(directory) -> list:
     """Lists subdirectories in the given directory, ordered by creation time.
 
     :param directory: Path to the directory to list subdirectories from.
@@ -38,7 +40,7 @@ def _list_subdirectories_by_creation_time(directory):  # noqa: ANN202
     return [subdir.name for subdir in subdirs]
 
 
-def _get_requests(workdir):  # noqa: ANN202
+def _get_requests(workdir) -> list:
     """Get the list of requests.
 
     :param workdir: Working directory.
@@ -47,7 +49,7 @@ def _get_requests(workdir):  # noqa: ANN202
     return _list_subdirectories_by_creation_time(workdir + "/requests")
 
 
-def _get_return_requests(workdir):  # noqa: ANN202
+def _get_return_requests(workdir) -> list:
     """Get the list of requests.
 
     :param workdir: Working directory.
@@ -56,7 +58,7 @@ def _get_return_requests(workdir):  # noqa: ANN202
     return _list_subdirectories_by_creation_time(workdir + "/return-requests")
 
 
-def _get_machines(workdir):  # noqa: ANN202
+def _get_machines(workdir) -> list:
     """Get the list of machines.
 
     :param workdir: Working directory.
@@ -78,40 +80,11 @@ def _get_machines(workdir):  # noqa: ANN202
     return machines
 
 
-def _get_node(machine_path):  # noqa: ANN202
-    """Get the node_name from the machine ID."""
-    if not machine_path.exists() or not machine_path.is_file():
-        return None
-
-    try:
-        return json.load(machine_path.open("r")).get("spec", {}).get("node_name", "")
-    # pylint: disable=broad-exception-caught
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _get_all_nodes(workdir):  # noqa: ANN202
-    """Get the list of all nodes."""
-    requests_dir = pathlib.Path(workdir + "/requests")
-    nodes = []
-    for request_dir in requests_dir.iterdir():
-        if request_dir.is_dir():
-            nodes.extend(
-                [
-                    _get_node(request_dir / entry.name)
-                    for entry in request_dir.iterdir()
-                    if not entry.name.startswith(".")
-                ]
-            )
-
-    return nodes
-
-
 @click.group(name="hostfactoryadmin")
 @click.pass_context
 @click.option(
     "--workdir",
-    default=HF_K8S_WORKDIR_DEFAULT,
+    default=context.GLOBAL.default_workdir,
     envvar="HF_K8S_WORKDIR",
     help="Hostfactory working directory.",
 )
@@ -179,25 +152,23 @@ def get_timings(ctx, from_event: str, to_event: str) -> None:
 
 
 @run.command()
+@click.option("--template-id", default="Template-K8s-A", help="HF template id.")
 @click.option("--count", default=1, help="Number of machines to create.")
-def request_machines(count) -> None:
+def request_machines(template_id, count) -> None:
     """Request a machine."""
-    data = {"template": {"templateId": "Template-K8s-A", "machineCount": count}}
+    data = {"template": {"templateId": template_id, "machineCount": count}}
     cli.output(json.dumps(data))
 
 
 @run.command()
-@click.pass_context
 @click.argument("machines", nargs=-1)
-def request_return_machines(ctx, machines) -> None:
+def request_return_machines(machines) -> None:
     """Return a machine."""
-    workdir = ctx.obj.get("workdir")
-    requests_dir = pathlib.Path(workdir) / "requests"
     data = {
         "machines": [
             {
                 "machineId": machine,
-                "name": _get_node(requests_dir / machine.split("-")[0] / machine),
+                "name": machine,
             }
             for machine in machines
         ]
@@ -225,5 +196,5 @@ def get_request_status(ctx, return_requests) -> None:
 def get_return_requests(ctx) -> None:
     """Get the status of a return request."""
     workdir = ctx.obj.get("workdir")
-    data = {"machines": [{"name": entry} for entry in _get_all_nodes(workdir) if entry]}
+    data = {"machines": [{"name": entry} for entry in _get_machines(workdir) if entry]}
     cli.output(json.dumps(data))

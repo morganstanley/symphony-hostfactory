@@ -95,7 +95,7 @@ ignore = [
     "UP006", # temporarily for monorepo migration
     "UP035", # ditto
     "A005",
-    "S311", # We do not do cryptography
+    "S311", # We do not do any cryptography
 ]
 
 # Very common error that appears not to be covered by existing Ruff filters
@@ -112,8 +112,10 @@ flake8-tidy-imports.banned-api."ms.version".msg = "ms.version is legacy/deprecat
 
 [lint.per-file-ignores]
 # Certain linter options do not make sense for tests
-"tests/**/*.py" = [
+"src/hostfactory/tests/**/*.py" = [
     "S101",     # allow assert statement
+    "SLF001",   # allow private member access in tests
     "ANN",      # do not expect type annotations
     "PLR2004",  # magic numbers ok in test assertions
+    "PT019",    # allow fixture param without value for unittest mock
 ]
