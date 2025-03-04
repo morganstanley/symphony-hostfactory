@@ -16,6 +16,8 @@ IBM Symphony hostfactory is a service that runs as part of IBM Symphony Orchestr
 The hosfactory service manages compute host bursting to public cloud. Hostfactory provides custom provider extension to allow usecase specific implementation of the host provider.
 [Hostfactory overview](https://www.ibm.com/docs/en/spectrum-symphony/7.3.2?topic=factory-overview).
 
+![screenshot](documentation/images/request_flow.png)
+
 
 ### Prerequisites
 
