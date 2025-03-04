@@ -1,11 +1,14 @@
-"""Morgan Stanley makes this available to you under the Apache License, Version 2.0
-(the "License"). You may obtain a copy of the License at
-http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed
-with this work for additional information regarding copyright ownership.
-Unless required by applicable law or agreed to in writing, software distributed
- under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- CONDITIONS OF ANY KIND, either express or implied.  See the License for the
- specific language governing permissions and limitations under the License.
+"""Morgan Stanley makes this available to you under the Apache License,
+Version 2.0 (the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file
+distributed with this work for additional information regarding
+copyright ownership. Unless required by applicable law or agreed
+to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+See the License for the specific language governing permissions and
+limitations under the License. Watch and manage hostfactory machine
+requests and pods in a Kubernetes cluster.
 
 Test hostfactory api module.
 """
@@ -14,14 +17,38 @@ import json
 import pathlib
 from unittest import mock
 
-from hostfactory import api
+import pytest
 
-# pylint: disable=protected-access
+from hostfactory import api
+from hostfactory.tests import generate_templates
+from hostfactory.tests import get_pod_spec
+from hostfactory.tests import get_workdir
 
 mock_pod = {
     "spec": {"node_name": "node1"},
     "status": {"pod_ip": "192.168.1.1", "phase": "Running"},
-    "metadata": {"creation_timestamp": "1739212317", "name": "pod1"},
+    "metadata": {
+        "creation_timestamp": "1739212317",
+        "name": "pod1",
+        "uid": "uid1",
+        "namespace": "n1",
+    },
+}
+
+mock_hf_template = {
+    "templates": [
+        {
+            "templateId": "mock_template_id",
+            "maxNumber": 10,
+            "attributes": {
+                "nram": ["4096"],
+                "ncpus": ["8"],
+                "ncores": ["1"],
+                "type": ["String", "X86_64"],
+            },
+            "podSpec": "pod-spec.yaml",
+        }
+    ]
 }
 
 
@@ -31,20 +58,20 @@ mock_pod = {
 def test_mktempdir(mock_mkdtemp) -> None:
     """Test mktempdir."""
     workdir = "/path/to/workdir"
-    temp_dir = api._mktempdir(workdir)  # noqa: SLF001
+    temp_dir = api._mktempdir(workdir)
     mock_mkdtemp.assert_called_once_with(dir=workdir, prefix=".")
-    assert isinstance(temp_dir, pathlib.Path)  # noqa: S101
-    assert str(temp_dir) == "/path/to/workdir/.tempdir"  # noqa: S101
+    assert isinstance(temp_dir, pathlib.Path)
+    assert str(temp_dir) == "/path/to/workdir/.tempdir"
 
 
 def test_generate_short_uuid() -> None:
     """Test generate short uuid."""
-    short_uuid = api._generate_short_uuid()  # noqa: SLF001
-    assert len(short_uuid) == 12  # noqa: S101, PLR2004
-    assert short_uuid.isalnum()  # noqa: S101
-    uuid01 = api._generate_short_uuid()  # noqa: SLF001
-    uuid02 = api._generate_short_uuid()  # noqa: SLF001
-    assert uuid01 != uuid02  # noqa: S101
+    short_uuid = api._generate_short_uuid()
+    assert len(short_uuid) == 12
+    assert short_uuid.isalnum()
+    uuid01 = api._generate_short_uuid()
+    uuid02 = api._generate_short_uuid()
+    assert uuid01 != uuid02
 
 
 def test_resolve_machine_status() -> None:
@@ -63,11 +90,36 @@ def test_resolve_machine_status() -> None:
     ]
 
     for pod, expected_status, expected_result, is_return_req in test_cases:
-        machine_status, machine_result = api._resolve_machine_status(  # noqa: SLF001
+        machine_status, machine_result = api._resolve_machine_status(
             pod, is_return_req=is_return_req
         )
-        assert machine_status == expected_status  # noqa: S101
-        assert machine_result == expected_result  # noqa: S101
+        assert machine_status == expected_status
+        assert machine_result == expected_result
+
+
+def test_write_pod_spec() -> None:
+    """Test write pod spec."""
+    workdir = pathlib.Path(get_workdir())
+    template_id = "Template-K8s-A"  # Exists in resources/templates.tpl
+    templates_path = generate_templates()
+    pod_spec = get_pod_spec()
+
+    api._write_podspec(workdir, templates_path, template_id)
+
+    pod_spec_file = workdir / ".podspec"
+    assert pod_spec_file.exists()
+    assert pod_spec_file.read_text() == pod_spec
+
+    wrong_template_id = "Wrong-Template"
+
+    with pytest.raises(
+        ValueError,
+        match=r"Template Id: .+ not found in templates file.",
+    ):
+        api._write_podspec(workdir, templates_path, wrong_template_id)
+
+    pathlib.Path(templates_path).unlink()
+    pod_spec_file.unlink()
 
 
 # TODO: (zaidn) Add tests for error cases.
@@ -75,31 +127,39 @@ def test_resolve_machine_status() -> None:
 @mock.patch("hostfactory.api.tempfile.mkdtemp", return_value="/path/to/workdir/tempdir")
 @mock.patch("hostfactory.api._generate_short_uuid", return_value="mock_request_id")
 @mock.patch("hostfactory.api.hostfactory.atomic_symlink")
-@mock.patch("hostfactory.api.os.rename")
-def test_request_machines(
+@mock.patch("pathlib.Path.rename")
+@mock.patch("hostfactory.api._get_templates", return_value=mock_hf_template)
+@mock.patch("pathlib.Path.write_text")
+def test_request_machines(  # noqa: PLR0913
+    mock_path_write_text,
+    mock_get_template_file,
     mock_rename,
     mock_atomic_symlink,
     mock_generate_short_uuid,
     mock_mkdtemp,
-    _mock_post_events,  # noqa: PT019
+    _mock_post_events,
 ) -> None:
     """Test request machines."""
     workdir = "/path/to/workdir"
     count = 3
+    template_id = "mock_template_id"
+    templates = "/path/to/templates.json"
 
-    response = api.request_machines(workdir, count)
-
+    response = api.request_machines(workdir, templates, template_id, count)
     mock_generate_short_uuid.assert_called_once()
+    mock_get_template_file.assert_called_once_with(templates)
     tempdir = pathlib.Path("/path/to/workdir/tempdir")
     requestdir = pathlib.Path("/path/to/workdir/requests/mock_request_id")
 
-    mock_rename.assert_called_once_with(tempdir, requestdir)
+    mock_path_write_text.assert_called_once()
+    mock_path_write_text.assert_called_with("pod-spec.yaml")
+    mock_rename.assert_called_once_with(requestdir)
     mock_mkdtemp.assert_called_once()
 
     request_id = response["requestId"]
-    assert request_id == "mock_request_id"  # noqa: S101
+    assert request_id == "mock_request_id"
 
-    assert mock_atomic_symlink.call_count == 3  # noqa: S101, PLR2004
+    assert mock_atomic_symlink.call_count == 3
     expected_symlink_calls = [
         mock.call("pending", tempdir / "mock_request_id-0"),
         mock.call("pending", tempdir / "mock_request_id-1"),
@@ -112,20 +172,22 @@ def test_request_machines(
 @mock.patch("hostfactory.api.tempfile.mkdtemp", return_value="/path/to/workdir/tempdir")
 @mock.patch("hostfactory.api._generate_short_uuid", return_value="mock_request_id")
 @mock.patch("hostfactory.api.hostfactory.atomic_symlink")
-@mock.patch("hostfactory.api.os.rename")
+@mock.patch("pathlib.Path.rename")
+@mock.patch("pathlib.Path.exists", return_value=True)
 def test_request_return_machines(
+    _mock_pathlib_exists,
     mock_rename,
     mock_atomic_symlink,
     mock_generate_short_uuid,
     mock_mkdtemp,
-    _mock_post_events,  # noqa: PT019
+    _mock_post_events,
 ) -> None:
     """Test request return machines."""
     workdir = "/path/to/workdir"
     machines = [
-        {"machineId": "machine-0"},
-        {"machineId": "machine-1"},
-        {"machineId": "machine-2"},
+        {"machineId": "uuid-0", "name": "machine-0"},
+        {"machineId": "uuid-1", "name": "machine-1"},
+        {"machineId": "uuid-2", "name": "machine-2"},
     ]
 
     response = api.request_return_machines(workdir, machines)
@@ -135,12 +197,12 @@ def test_request_return_machines(
     returnsdir = pathlib.Path("/path/to/workdir/return-requests/mock_request_id")
     podsdir = pathlib.Path("/path/to/workdir/pods")
 
-    mock_rename.assert_called_once_with(tempdir, returnsdir)
+    mock_rename.assert_called_once_with(returnsdir)
     mock_mkdtemp.assert_called_once()
 
     request_id = response["requestId"]
-    assert request_id == "mock_request_id"  # noqa: S101
-    assert mock_atomic_symlink.call_count == 3  # noqa: S101, PLR2004
+    assert request_id == "mock_request_id"
+    assert mock_atomic_symlink.call_count == 3
     expected_symlink_calls = [
         mock.call(podsdir / "machine-0", tempdir / "mock_request_id-0"),
         mock.call(podsdir / "machine-1", tempdir / "mock_request_id-1"),
@@ -163,7 +225,7 @@ def test_get_request_status(
     mock_open,
     mock_iterdir,
     mock_exists,
-    _mock_post_events,  # noqa: PT019
+    _mock_post_events,
 ) -> None:
     """Test get request status."""
     workdir = "/path/to/workdir"
@@ -181,14 +243,14 @@ def test_get_request_status(
                 "status": "complete",
                 "machines": [
                     {
-                        "machineId": "machine1",
-                        "name": "node1",
+                        "machineId": "uid1",
+                        "name": "pod1",
                         "result": "succeed",
                         "status": "running",
                         "privateIpAddress": "192.168.1.1",
                         "publicIpAddress": "",
                         "launchtime": "1739212317",
-                        "message": "pod1",
+                        "message": "Allocated by K8s hostfactory - ns: n1",
                     }
                 ],
             }
@@ -199,7 +261,7 @@ def test_get_request_status(
     response = api.get_request_status(workdir, hf_req_ids)
 
     # Assertions
-    assert response == expected_response  # noqa: S101
+    assert response == expected_response
     mock_exists.assert_called()
     mock_iterdir.assert_called()
     mock_open.assert_called()
@@ -212,9 +274,9 @@ def test_get_request_status(
 def test_get_return_requests(mock_open, mock_iterdir, mock_exists) -> None:
     """Test get_return_requests."""
     machines = [
-        {"machineId": "machine-0", "name": "node1"},
-        {"machineId": "machine-1", "name": "node2"},
-        {"machineId": "machine-2", "name": "node3"},
+        {"machineId": "machine-0", "name": "pod1"},
+        {"machineId": "machine-1", "name": "pod2"},
+        {"machineId": "machine-2", "name": "pod3"},
     ]
 
     mock_exists.return_value = True
@@ -225,16 +287,22 @@ def test_get_return_requests(mock_open, mock_iterdir, mock_exists) -> None:
     ]
     mock_open.side_effect = [
         mock.mock_open(
-            read_data=json.dumps({"spec": {"node_name": "node1"}})
+            read_data=json.dumps(
+                {"metadata": {"name": "pod1"}, "status": {"phase": "Running"}}
+            )
         ).return_value,
         mock.mock_open(
-            read_data=json.dumps({"spec": {"node_name": "node2"}})
+            read_data=json.dumps(
+                {"metadata": {"name": "pod2"}, "status": {"phase": "Running"}}
+            )
         ).return_value,
         mock.mock_open(
-            read_data=json.dumps({"spec": {"node_name": "node4"}})
+            read_data=json.dumps(
+                {"metadata": {"name": "pod4"}, "status": {"phase": "Running"}}
+            )
         ).return_value,
     ]
 
     response = api.get_return_requests("/path/to/workdir", machines)
     extra = {request["machine"] for request in response["requests"]}
-    assert extra == {"node3"}  # noqa: S101
+    assert extra == {"pod3"}

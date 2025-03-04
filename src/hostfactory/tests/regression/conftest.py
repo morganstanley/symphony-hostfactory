@@ -1,20 +1,21 @@
-"""Morgan Stanley makes this available to you under the Apache License, Version 2.0
-(the "License"). You may obtain a copy of the License at
-http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file distributed
-with this work for additional information regarding copyright ownership.
-Unless required by applicable law or agreed to in writing, software distributed
- under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
- CONDITIONS OF ANY KIND, either express or implied.  See the License for the
- specific language governing permissions and limitations under the License.
+"""Morgan Stanley makes this available to you under the Apache License,
+Version 2.0 (the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file
+distributed with this work for additional information regarding
+copyright ownership. Unless required by applicable law or agreed
+to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+See the License for the specific language governing permissions and
+limitations under the License. Watch and manage hostfactory machine
+requests and pods in a Kubernetes cluster.
 
 Test configuration for regression testing
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
-import os
 import random
 import tempfile
 import threading
@@ -29,6 +30,8 @@ import yaml
 from hostfactory.cli.hf import run as hostfactory
 from hostfactory.cli.hfadmin import run as hfadmin
 from hostfactory.events import event_average
+from hostfactory.tests import generate_templates
+from hostfactory.tests import get_workdir
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -45,11 +48,6 @@ def pytest_collect_file(parent, file_path):
         return YamlFile.from_parent(parent, path=file_path)
 
     return None
-
-
-def get_workdir():
-    """Returns the workdir for the tests."""
-    return os.getenv("WORKDIR", "/var/tmp/hostfactory")  # noqa: S108
 
 
 class YamlFile(pytest.File):
@@ -87,7 +85,9 @@ def _run_cli(module: str, args: list) -> click.testing.Result:
     return result
 
 
-def run_hostfactory_command(command: str, json_in: str) -> click.testing.Result:
+def run_hostfactory_command(
+    command: str, json_in: str, templates: str = None
+) -> click.testing.Result:
     """Run a hostfactory command"""
     logger.info("Json in is %s", json_in)
 
@@ -97,13 +97,17 @@ def run_hostfactory_command(command: str, json_in: str) -> click.testing.Result:
         json_file.write(json_in)
         json_file.flush()
         logger.debug("Json is written to %s", json_file.name)
+        hf_args = ["--workdir", get_workdir(), command, str(json_file.name)]
+        if templates:
+            hf_args = ["--templates", templates, *hf_args]
+
         result = _run_cli(
             hostfactory,
-            ["--workdir", get_workdir(), command, str(json_file.name)],
+            hf_args,
         )
 
         logger.info("Returned hostfactory command.")
-        assert result.exit_code == 0, result.output  # noqa: S101
+        assert result.exit_code == 0, result.output
         return result
 
 
@@ -111,22 +115,20 @@ def run_hostfactory_admin_command(command: str) -> click.testing.Result:
     """Run a hostfactory admin command"""
     result = _run_cli(hfadmin, ["--workdir", get_workdir(), *command.split(" ")])
 
-    assert result.exit_code == 0  # noqa: S101
-    assert result.output is not None, result.output  # noqa: S101
+    assert result.exit_code == 0
+    assert result.output is not None, result.output
     logger.info("Hostfactory admin output is %s", result.output)
 
     return result
 
 
 def run_pod_watch_command() -> click.testing.Result:
-    """Run a pod watch command"""
+    """Run pod watcher command"""
     return _run_cli(hostfactory, ["--workdir", get_workdir(), "watch", "pods"])
 
 
-def run_request_machine_command(pod_flavour: str = "vanilla") -> click.testing.Result:
-    """Run a pod watch command"""
-    pod_spec_path = get_pod_spec(pod_flavour)
-    logger.info("Using pod spec %s", pod_spec_path)
+def run_request_machine_command() -> click.testing.Result:
+    """Run request-machines watcher command"""
     return _run_cli(
         hostfactory,
         [
@@ -134,23 +136,12 @@ def run_request_machine_command(pod_flavour: str = "vanilla") -> click.testing.R
             get_workdir(),
             "watch",
             "request-machines",
-            "--pod-spec",
-            pod_spec_path,
         ],
     )
 
 
-def get_pod_spec(flavor: str = "vanilla") -> str:
-    """Returns the absolute path to the pod spec"""
-    return str(
-        importlib.resources.files("hostfactory.tests.resources").joinpath(
-            f"{flavor}-spec.yml"
-        )
-    )
-
-
 def run_request_return_command() -> click.testing.Result:
-    """Run a pod watch command"""
+    """Run request-return-machines watcher command"""
     return _run_cli(
         hostfactory,
         ["--workdir", get_workdir(), "watch", "request-return-machines"],
@@ -165,9 +156,9 @@ def run_event_command() -> click.testing.Result:
     )
 
 
-def run_custom_hostfactory_test( # noqa: C901, PLR0912
+def run_custom_hostfactory_test(  # noqa: C901,PLR0912
     test_spec: dict,
-    run_hostfactory_pods,  # pylint: disable=unused-argument  # noqa: ARG001
+    run_hostfactory_pods,  # noqa: ARG001
     run_hostfactory_machines,  # noqa: ARG001
     run_hostfactory_events,  # noqa: ARG001
     run_hostfactory_returns,  # noqa: ARG001
@@ -186,7 +177,7 @@ def run_custom_hostfactory_test( # noqa: C901, PLR0912
             args = " " + " ".join(machines)
         result = run_hostfactory_admin_command(test_spec["hostfactory-admin"] + args)
         json_in = result.output
-        assert json_in is not None, result  # noqa: S101
+        assert json_in is not None, result
 
     if "hostfactory" in test_spec:
         logger.info(
@@ -194,7 +185,12 @@ def run_custom_hostfactory_test( # noqa: C901, PLR0912
             json_in,
             test_spec["hostfactory"],
         )
-        run_hostfactory_command(test_spec["hostfactory"], json_in)
+
+        templates = None
+        if "request-machines" in test_spec["hostfactory"]:
+            templates = generate_templates()
+
+        run_hostfactory_command(test_spec["hostfactory"], json_in, templates)
 
     if "list-machines" in test_spec:
         limit = 10
@@ -216,7 +212,13 @@ def run_custom_hostfactory_test( # noqa: C901, PLR0912
         logger.info("Draining node")
         value = test_spec["drain_node"]
         for _ in range(value):
-            drain_node_in_namespace()
+            deleted_pods = drain_node_in_namespace()
+            test_spec["target"]["pods"] -= deleted_pods
+            logger.info(
+                "We have forcibly stopped %s nodes, the target node count is %s",
+                deleted_pods,
+                test_spec["target"]["pods"],
+            )
 
     if "target" in test_spec:
         logger.info("Target is %s", test_spec["target"])
@@ -250,7 +252,7 @@ def verify_timings(expected_timings: dict) -> None:
         actual_average = event_average(
             get_workdir(), event_from=from_event, event_to=to_event
         )
-        assert actual_average < expected_average  # noqa S101
+        assert actual_average < expected_average
 
 
 def get_pods_in_current_namespace() -> kubernetes.client.models.V1PodList:
@@ -291,7 +293,7 @@ def delete_pods_in_namespace() -> None:
         logger.info("Waiting for namespace to clean up")
 
 
-def drain_node_in_namespace() -> None:
+def drain_node_in_namespace() -> int:
     """Modeling draining a node as deleting all the pods running on a node.
     This picks a random node and delete all pods on it.
     """
@@ -304,25 +306,29 @@ def drain_node_in_namespace() -> None:
     # Create an instance of the CoreV1Api
     core_v1_api = kubernetes.client.CoreV1Api()
 
-    # List the nodes in the current namespace
-    nodes = core_v1_api.list_node()
-
-    # Pick a random node
-    node = random.choice(nodes.items)
-
     # List the pods in the current namespace
     pods = core_v1_api.list_namespaced_pod(namespace=namespace)
 
+    # List the nodes in the current namespace we are running on
+    nodes = [pod.spec.node_name for pod in pods.items]
+    logger.info("Active nodes are %s", nodes)
+    # Pick a random node
+    node = random.choice(nodes)
+    logger.info("Picked node %s to empty", node)
+    count = 0
     # Delete each pod
     for pod in pods.items:
-        if pod.spec.node_name == node.metadata.name:
+        if pod.spec.node_name == node:
+            logger.info("Deleting pod %s", pod.metadata.name)
             core_v1_api.delete_namespaced_pod(
                 name=pod.metadata.name, namespace=namespace
             )
+            count += 1
     while len(get_pods_in_current_namespace().items) != 0:
         # TODO sleep should be configurable
         sleep(5)
-        logger.info("Waiting for namespace to clean up")
+        logger.info("Waiting for pods to be removed from drained node")
+    return count
 
 
 class PodWatcher:
@@ -332,11 +338,11 @@ class PodWatcher:
         self.output = None
         logger.info("In pod watcher init")
 
-    def __enter__(self):  # noqa: ANN204, D105
+    def __enter__(self):  # noqa: D105
         logger.info("In pod watcher enter")
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: ANN204, D105
+    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: D105
         logger.info("In pod watcher exit: %s", self.output)
 
     def run_pod_watcher(self):
@@ -355,11 +361,11 @@ class EventsWatcher:
         self.output = None
         logger.info("In event watcher init")
 
-    def __enter__(self):  # noqa: ANN204, D105
+    def __enter__(self):  # noqa: D105
         logger.info("In event watcher enter")
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: ANN204, D105
+    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: D105
         logger.info("In event watcher exit: %s", self.output)
 
     def run_events_watcher(self):
@@ -378,11 +384,11 @@ class RequestMachineWatcher:
         self.output = None
         logger.info("In request machine watcher init")
 
-    def __enter__(self):  # noqa: ANN204, D105
+    def __enter__(self):  # noqa: D105
         logger.info("In request machine watcher enter")
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: ANN204, D105
+    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: D105
         logger.info("In request machine watcher exit: %s", self.output)
 
     def run_request_machine_watcher(self):
@@ -401,11 +407,11 @@ class ReturnMachineWatcher:
         self.output = None
         logger.info("In return machine watcher init")
 
-    def __enter__(self):  # noqa: ANN204, D105
+    def __enter__(self):  # noqa: D105
         logger.info("In return machine watcher enter")
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: ANN204, D105
+    def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: D105
         logger.info("In return machine watcher exit: %s", self.output)
 
     def run_request_return_watcher(self):

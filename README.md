@@ -74,10 +74,7 @@ Watches the kubernetes event loop for new/modified/deleted pods and captures the
 
 A python venv containing the necessary dependencies can be created using the following command:
 ```
-python -m pip install --upgrade pip
-pip install uv
-uv venv
-uv pip install -r constraints.txt
+./create_dev_venv.sh
 source .venv/bin/activate
 ```
 
