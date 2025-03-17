@@ -23,23 +23,20 @@ from functools import partial
 from time import sleep
 
 import click.testing
-import kubernetes
 import pytest
 import yaml
 
 from hostfactory.cli.hf import run as hostfactory
 from hostfactory.cli.hfadmin import run as hfadmin
 from hostfactory.events import event_average
-from hostfactory.tests import generate_templates
+from hostfactory.impl.hfadmin import delete_pods_in_namespace
+from hostfactory.impl.hfadmin import drain_node_in_namespace
+from hostfactory.impl.hfadmin import get_pods_in_current_namespace
+from hostfactory.tests import generate_provider_conf
 from hostfactory.tests import get_workdir
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
-
-# pylint: disable=redefined-outer-name
-
-# TODO Manage kubeconfig setup for MKS, EKS and ASK
 
 
 def pytest_collect_file(parent, file_path):
@@ -86,7 +83,7 @@ def _run_cli(module: str, args: list) -> click.testing.Result:
 
 
 def run_hostfactory_command(
-    command: str, json_in: str, templates: str = None
+    command: str, json_in: str, confdir: str = None
 ) -> click.testing.Result:
     """Run a hostfactory command"""
     logger.info("Json in is %s", json_in)
@@ -98,8 +95,8 @@ def run_hostfactory_command(
         json_file.flush()
         logger.debug("Json is written to %s", json_file.name)
         hf_args = ["--workdir", get_workdir(), command, str(json_file.name)]
-        if templates:
-            hf_args = ["--templates", templates, *hf_args]
+        if confdir:
+            hf_args = ["--confdir", confdir, *hf_args]
 
         result = _run_cli(
             hostfactory,
@@ -156,8 +153,9 @@ def run_event_command() -> click.testing.Result:
     )
 
 
-def run_custom_hostfactory_test(  # noqa: C901,PLR0912
+def run_custom_hostfactory_test(  # noqa: C901,PLR0912, PLR0913
     test_spec: dict,
+    flavor: str,
     run_hostfactory_pods,  # noqa: ARG001
     run_hostfactory_machines,  # noqa: ARG001
     run_hostfactory_events,  # noqa: ARG001
@@ -186,11 +184,11 @@ def run_custom_hostfactory_test(  # noqa: C901,PLR0912
             test_spec["hostfactory"],
         )
 
-        templates = None
+        confdir = None
         if "request-machines" in test_spec["hostfactory"]:
-            templates = generate_templates()
+            confdir = generate_provider_conf(flavor)
 
-        run_hostfactory_command(test_spec["hostfactory"], json_in, templates)
+        run_hostfactory_command(test_spec["hostfactory"], json_in, confdir)
 
     if "list-machines" in test_spec:
         limit = 10
@@ -253,82 +251,6 @@ def verify_timings(expected_timings: dict) -> None:
             get_workdir(), event_from=from_event, event_to=to_event
         )
         assert actual_average < expected_average
-
-
-def get_pods_in_current_namespace() -> kubernetes.client.models.V1PodList:
-    """Get the pods in the current namespace"""
-    # Load Kubernetes configuration
-    kubernetes.config.load_kube_config()
-
-    # Get the current namespace
-    namespace = kubernetes.config.list_kube_config_contexts()[1]["context"]["namespace"]
-
-    # Create an instance of the CoreV1Api
-    core_v1_api = kubernetes.client.CoreV1Api()
-
-    # List the pods in the current namespace
-    return core_v1_api.list_namespaced_pod(namespace=namespace)
-
-
-def delete_pods_in_namespace() -> None:
-    """Clean up the namespace we are evolving in"""
-    # Load Kubernetes configuration
-    kubernetes.config.load_kube_config()
-
-    # Get the current namespace
-    namespace = kubernetes.config.list_kube_config_contexts()[1]["context"]["namespace"]
-
-    # Create an instance of the CoreV1Api
-    core_v1_api = kubernetes.client.CoreV1Api()
-
-    # List the pods in the current namespace
-    pods = core_v1_api.list_namespaced_pod(namespace=namespace)
-
-    # Delete each pod
-    for pod in pods.items:
-        core_v1_api.delete_namespaced_pod(name=pod.metadata.name, namespace=namespace)
-    while len(get_pods_in_current_namespace().items) != 0:
-        # TODO sleep should be configurable
-        sleep(5)
-        logger.info("Waiting for namespace to clean up")
-
-
-def drain_node_in_namespace() -> int:
-    """Modeling draining a node as deleting all the pods running on a node.
-    This picks a random node and delete all pods on it.
-    """
-    # Load Kubernetes configuration
-    kubernetes.config.load_kube_config()
-
-    # Get the current namespace
-    namespace = kubernetes.config.list_kube_config_contexts()[1]["context"]["namespace"]
-
-    # Create an instance of the CoreV1Api
-    core_v1_api = kubernetes.client.CoreV1Api()
-
-    # List the pods in the current namespace
-    pods = core_v1_api.list_namespaced_pod(namespace=namespace)
-
-    # List the nodes in the current namespace we are running on
-    nodes = [pod.spec.node_name for pod in pods.items]
-    logger.info("Active nodes are %s", nodes)
-    # Pick a random node
-    node = random.choice(nodes)
-    logger.info("Picked node %s to empty", node)
-    count = 0
-    # Delete each pod
-    for pod in pods.items:
-        if pod.spec.node_name == node:
-            logger.info("Deleting pod %s", pod.metadata.name)
-            core_v1_api.delete_namespaced_pod(
-                name=pod.metadata.name, namespace=namespace
-            )
-            count += 1
-    while len(get_pods_in_current_namespace().items) != 0:
-        # TODO sleep should be configurable
-        sleep(5)
-        logger.info("Waiting for pods to be removed from drained node")
-    return count
 
 
 class PodWatcher:

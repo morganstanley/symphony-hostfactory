@@ -20,17 +20,22 @@ class Context:
     def __init__(self) -> None:
         """Initialize context."""
         self.debug = False
-        self.logfile = None
         self.workdir = None
         self.dbfile = None
         self.conn = None
         self.dirname = None
-        self.templates = None
+        self.confdir = None
+        self.templates_path = None
 
     @property
     def default_workdir(self) -> str:
         """Get the default workdir."""
         return self.workdir if self.workdir else "/tmp/hostfactory"  # noqa: S108
+
+    @property
+    def default_templates_filename(self) -> str:
+        """Get the default templates filename."""
+        return "k8sprov_templates.json"
 
 
 GLOBAL = Context()

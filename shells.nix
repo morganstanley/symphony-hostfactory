@@ -60,7 +60,7 @@ let
       src="$(dirname "$(dirname "$out")")"
       cd "$src"
 
-      venv="$src"/venv
+      venv="$src"/.venv
       if test -w default.nix; then
 
         # Create a virtual environment and install the project
@@ -83,7 +83,7 @@ let
         done
         unset PYTHONPATH
         cd "$src"
-        "$venv"/bin/pip install -e '.[dev]'
+        "$venv"/bin/pip install -e '.'
       else
         # Assume existing virtual environment.
         # TODO: consider installing into different venv for each user.

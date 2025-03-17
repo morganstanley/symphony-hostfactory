@@ -26,18 +26,21 @@ dependencies = [
     "wrapt",
     "pydantic",
 ]
+
 [project.optional-dependencies]
-# Specify test-only dependencies here.
 testing = [
     "PyYAML",
     "coverage",
     "pytest-cov",
     "pytest",
+    "mypy",
+    "ruff",
+    "typos",
 ]
-
 documentation = [
-    "sphinx_material",
-    "importlib_metadata"
+    "sphinx",
+    "sphinx-click",
+    "myst-parser",
 ]
 
 [project.scripts]
@@ -106,5 +109,3 @@ files.extend-exclude = ["*.json"]
 requestor = "requestor"
 nin = "nin"
 
-[tool.ruff]
-target-version = "py311"

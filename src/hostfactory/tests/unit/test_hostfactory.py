@@ -13,10 +13,7 @@ requests and pods in a Kubernetes cluster.
 Test Hostfactory implementation.
 """
 
-# pylint: disable=duplicate-code
-
 import json
-import os
 import pathlib
 import re
 import shutil
@@ -28,13 +25,11 @@ import click.testing
 
 from hostfactory.cli.hf import run as hostfactory
 from hostfactory.cli.hfadmin import run as hfadmin
-from hostfactory.tests import generate_templates
+from hostfactory.tests import cleanup_provider_conf
+from hostfactory.tests import generate_provider_conf
 from hostfactory.validator import validate
 
 UUID_PATTERN = r"[a-zA-Z0-9_]{12}"
-
-
-# pylint: disable=protected-access
 
 
 def _create_json_in(json_in, workdir) -> str:
@@ -60,24 +55,22 @@ class TestGetAavailableTemplates(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up the test environment."""
-        self.templates_path = generate_templates()
+        self.confdir = generate_provider_conf()
 
     def tearDown(self) -> None:
         """Clean up the test environment."""
-        pathlib.Path(self.templates_path).unlink()
+        cleanup_provider_conf()
 
     def test_get_available_templates(self) -> None:
         """Test case for the `get_available_templates` function.
         This test case verifies the behavior of the `get_available_templates` function
         by invoking it with a sample input and checking the output.
         """
-        assert pathlib.Path(self.templates_path).exists()
-
         result = _run_cli(
             hostfactory,
             [
-                "--templates",
-                self.templates_path,
+                "--confdir",
+                self.confdir,
                 "get-available-templates",
             ],
         )
@@ -104,27 +97,27 @@ class TestRequestMachines(unittest.TestCase):
             ["--workdir", self.workdir, "request-machines", "--count", 5],
         ).output
         self.json_in = _create_json_in(req_in, self.workdir)
-        self.templates_path = generate_templates()
+        self.confdir = generate_provider_conf()
 
     def tearDown(self) -> None:
         """Clean up the test environment."""
         shutil.rmtree(self.workdir, ignore_errors=True)
-        pathlib.Path(self.templates_path).unlink()
+        cleanup_provider_conf()
 
     def test_request_machines(self) -> None:
         """Test case for the `request_machines` function.
         This test case verifies the behavior of the `request_machines` function
         by invoking it with a sample input and checking the output.
         """
-        assert self.templates_path is not None
+        assert self.confdir is not None
 
         result = _run_cli(
             hostfactory,
             [
                 "--workdir",
                 self.workdir,
-                "--templates",
-                self.templates_path,
+                "--confdir",
+                self.confdir,
                 "request-machines",
                 self.json_in,
             ],
@@ -140,7 +133,9 @@ class TestRequestMachines(unittest.TestCase):
         assert re.search(UUID_PATTERN, json_output.get("requestId"))
         reqid = json_output.get("requestId")
         # Check that events are generated.
-        assert os.path.exists(f"{self.workdir}/events/pod~{reqid}-0~request~{reqid}")  # noqa: PTH110
+        assert pathlib.Path(
+            f"{self.workdir}/events/pod~{reqid}-0~request~{reqid}"
+        ).exists()
 
 
 @mock.patch("hostfactory.k8sutils.load_k8s_config", return_value=None)
@@ -185,7 +180,6 @@ class TestRequestReturnMachines(unittest.TestCase):
 
         assert result.exit_code == 0
 
-        # Assert that json output does not raise any errors
         json_output = json.loads(result.output)
         assert json_output is not None
         assert "message" in json_output
