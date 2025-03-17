@@ -5,13 +5,14 @@ if ! command -v pip &> /dev/null
 then
     echo "pip could not be found"
     python -m ensurepip --upgrade
-    python -m pip install --upgrade pip
+    pip install --upgrade pip
 fi
-python -m pip install uv
-python -m uv venv
-source .venv/bin/activate
+pip install uv
+VENV="${VENV:-venv}"
+uv venv "${VENV}" --allow-existing
+source "${VENV}/bin/activate"
 python -m ensurepip --upgrade
-python -m pip install --upgrade pip
+pip install --upgrade pip
 pip install uv
 uv pip install -r pyproject.toml -c constraints.txt
 uv pip install -e .

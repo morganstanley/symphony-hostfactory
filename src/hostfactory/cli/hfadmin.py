@@ -23,6 +23,8 @@ from hostfactory import cli
 from hostfactory import events
 from hostfactory.cli import context
 from hostfactory.cli import log_handler
+from hostfactory.impl.hfadmin import delete_pods_in_namespace
+from hostfactory.impl.hfadmin import drain_node_in_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -96,18 +98,21 @@ def _get_machines(workdir) -> list:
     default="info",
     help="Set the log level.",
 )
-def run(ctx, workdir, log_level) -> None:
+@click.option(
+    "--log-file",
+    default=None,
+    envvar="HF_K8S_LOG_FILE",
+    help="Hostfactory log file location.",
+    type=click.Path(exists=False, file_okay=True, dir_okay=False, writable=True),
+)
+def run(ctx, workdir, log_level, log_file) -> None:
     """Entry point for the hostfactoryadmin command group."""
     if not pathlib.Path(workdir).is_dir():
         raise ValueError("Invalid workdir: [%s] is not a directory.", workdir)
 
     ctx.obj = {"workdir": workdir}
 
-    log_handler.setup_logging(log_level=log_level)
-    logger.debug(
-        "A detailed log file can be found at: %s",
-        context.GLOBAL.logfile,
-    )
+    log_handler.setup_logging(log_level=log_level, log_file=log_file)
 
 
 @run.command()
@@ -198,3 +203,21 @@ def get_return_requests(ctx) -> None:
     workdir = ctx.obj.get("workdir")
     data = {"machines": [{"name": entry} for entry in _get_machines(workdir) if entry]}
     cli.output(json.dumps(data))
+
+
+@run.command()
+@click.option("--count", default=1, help="The number of nodes to drain", type=int)
+@click.option("--sleep", default=5, help="The time to wait between checks", type=int)
+def delete_pods(count, sleep) -> None:
+    """Delete all the pods on a node."""
+    delete_pods_in_namespace(pod_count=count, sleep_duration=sleep)
+    cli.output(f"Deleted {count} pods")
+
+
+@run.command()
+@click.option("--count", default=1, help="The number of nodes to drain", type=int)
+@click.option("--sleep", default=5, help="The time to wait between checks", type=int)
+def drain_nodes(count, sleep) -> None:
+    """Drain nodes."""
+    deleted_count = drain_node_in_namespace(node_count=count, sleep_duration=sleep)
+    cli.output(f"Deleted {deleted_count} pods from nodes")

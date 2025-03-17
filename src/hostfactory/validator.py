@@ -2,7 +2,6 @@
 
 import logging
 from typing import List
-from typing import Optional
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -16,7 +15,7 @@ class Attributes(BaseModel):
 
     nram: List[str]
     ncpus: List[str]
-    ncores: Optional[List[str]] = None
+    ncores: List[str] | None = None
     machine_type: List[str] = Field(alias="type")
 
 

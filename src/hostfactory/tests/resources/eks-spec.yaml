@@ -8,5 +8,5 @@ metadata:
 spec:
   containers:
     - name: hello
-      image: {{ HF_K8S_IMAGE_URL }}
+      image: {{ image }}
       command: ['sh', '-c', 'echo "Hello, Kubernetes!" && sleep 3600']

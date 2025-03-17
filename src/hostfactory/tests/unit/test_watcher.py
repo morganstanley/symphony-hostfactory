@@ -91,7 +91,7 @@ class TestRequestMachinesWatcher(unittest.TestCase):
             )
             for i in range(1, 4)
         ]
-        mock_create_pod.assert_has_calls(calls, any_order=True)
+        mock_create_pod.assert_has_calls(calls)
         assert pathlib.Path(self.req_dir / ".processed").exists()
 
 
