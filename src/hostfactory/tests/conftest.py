@@ -10,12 +10,23 @@ See the License for the specific language governing permissions and
 limitations under the License. Watch and manage hostfactory machine
 requests and pods in a Kubernetes cluster.
 
-Command line helpers
+Test configuration for regression testing
 """
 
-import click
+import pytest
 
 
-def output(value: str | float | bool) -> None:
-    """Output value"""
-    return click.echo(value)
+def pytest_addoption(parser):
+    """Add options to the pytest parser."""
+    parser.addoption(
+        "--flavor",
+        action="store",
+        default="vanilla",
+        help="Flavor of the regression test.",
+    )
+
+
+@pytest.fixture
+def flavor(request):
+    """Fixture to get the flavor of the regression test."""
+    return request.config.getoption("--flavor")

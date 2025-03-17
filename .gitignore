@@ -77,6 +77,7 @@ __pycache__/
 
 # Python build artifacts.
 venv/
+.venv/
 build/
 *.egg-info/
 hostfactory/*/_version.py
@@ -108,4 +109,3 @@ myenv/
 venv
 mypy_cache/
 .tox/
-

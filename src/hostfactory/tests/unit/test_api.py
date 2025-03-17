@@ -20,7 +20,7 @@ from unittest import mock
 import pytest
 
 from hostfactory import api
-from hostfactory.tests import generate_templates
+from hostfactory.tests import generate_provider_conf
 from hostfactory.tests import get_pod_spec
 from hostfactory.tests import get_workdir
 
@@ -101,7 +101,8 @@ def test_write_pod_spec() -> None:
     """Test write pod spec."""
     workdir = pathlib.Path(get_workdir())
     template_id = "Template-K8s-A"  # Exists in resources/templates.tpl
-    templates_path = generate_templates()
+    temp_confdir = generate_provider_conf()
+    templates_path = pathlib.Path(temp_confdir) / "k8sprov_templates.json"
     pod_spec = get_pod_spec()
 
     api._write_podspec(workdir, templates_path, template_id)
@@ -147,7 +148,7 @@ def test_request_machines(  # noqa: PLR0913
 
     response = api.request_machines(workdir, templates, template_id, count)
     mock_generate_short_uuid.assert_called_once()
-    mock_get_template_file.assert_called_once_with(templates)
+    mock_get_template_file.assert_called_once_with(pathlib.Path(templates))
     tempdir = pathlib.Path("/path/to/workdir/tempdir")
     requestdir = pathlib.Path("/path/to/workdir/requests/mock_request_id")
 
