@@ -16,13 +16,11 @@ Logging setup.
 import datetime
 import logging
 import sys
-import tempfile
+import typing
 
 import wrapt
 from rich.console import Console
 from rich.text import Text
-
-from hostfactory.cli import context
 
 SUPPORT_UNICODE = True
 MAX_PANEL_WIDTH = 100
@@ -94,7 +92,7 @@ class MarkupHandler(logging.Handler):
         CONSOLE.print(*renderables, soft_wrap=True)
 
 
-def setup_logging(log_level: str) -> None:
+def setup_logging(log_level: str, log_file: typing.Optional[str] = None) -> None:
     """Setup logging handlers. Invoke once."""
     # ruff: noqa: PLW0603
     # We can live with the global constant mutation, because upstream
@@ -103,20 +101,18 @@ def setup_logging(log_level: str) -> None:
     global SUPPORT_UNICODE
     debug = log_level == "debug"
 
-    if not sys.stderr.encoding.lower().startswith("utf"):
-        SUPPORT_UNICODE = False
+    SUPPORT_UNICODE = sys.stderr.encoding.lower().startswith("utf")
 
     CONSOLE.__wrapped__ = Console(stderr=True, emoji=SUPPORT_UNICODE)
 
     plain_handler = MarkupHandler(markup_in_message=False, show_logger=debug)
     plain_handler.setLevel(logging.DEBUG if debug else logging.INFO)
 
-    with tempfile.NamedTemporaryFile(delete=False, mode="w") as lf:
-        context.GLOBAL.logfile = lf.name
+    file_handler = None
+    if log_file:
+        file_handler = logging.FileHandler(filename=log_file)
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
-    file_handler = logging.FileHandler(filename=context.GLOBAL.logfile)
-    file_formatter = logging.Formatter(LOG_FORMAT)
-    file_handler.setFormatter(file_formatter)
     # Root logger is conservative. No markup support because
     # we can't expect libraries not to try to emit broken markdown.
     logging.basicConfig(
@@ -127,6 +123,9 @@ def setup_logging(log_level: str) -> None:
 
     # For the loggers we *do* control, support full markup.
     logger = logging.getLogger("hostfactory")
-    logger.addHandler(file_handler)
-
+    if file_handler:
+        logger.addHandler(file_handler)
     logger.propagate = True
+
+    if log_file:
+        logger.debug("A detailed log file can be found at: %s", log_file)

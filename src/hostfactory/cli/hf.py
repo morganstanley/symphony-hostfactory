@@ -59,64 +59,67 @@ logger = logging.getLogger(__name__)
     help="Set the log level.",
 )
 @click.option(
+    "--log-file",
+    default=None,
+    envvar="HF_K8S_LOG_FILE",
+    help="Hostfactory log file location.",
+    type=click.Path(exists=False, file_okay=True, dir_okay=False, writable=True),
+)
+@click.option(
     "--workdir",
     default=context.GLOBAL.default_workdir,
     envvar="HF_K8S_WORKDIR",
     help="Hostfactory working directory.",
 )
 @click.option(
-    "--templates",
-    envvar="HF_K8S_TEMPLATES",
-    help="Hostfactory templates json file.",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False, readable=True),
+    "--confdir",
+    envvar="HF_K8S_PROVIDER_CONFDIR",
+    help="Hostfactory config directory location.",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
 )
-@click.pass_context
 @ON_EXCEPTIONS
-def run(ctx, proxy, log_level, workdir, templates) -> None:
+def run(proxy, log_level, log_file, workdir, confdir) -> None:
     """Entry point for the hostfactory command group.
     Example usage:
     $ hostfactory request-machines <json_file>
 
     Args:
-        ctx (click.Context): The click context object.
         proxy (str): The proxy URL to access the K8s API.
         log_level (str): The log level to set.
+        log_file (str): The log file location.
+        workdir (str): The working directory.
+        confdir (str): The configuration directory.
     """
-    log_handler.setup_logging(log_level)
+    context.GLOBAL.workdir = workdir
+    context.GLOBAL.proxy = proxy
+    context.GLOBAL.dirname = "/".join([workdir, "events"])
+    if confdir:
+        context.GLOBAL.templates_path = "/".join(
+            [confdir, context.GLOBAL.default_templates_filename]
+        )
 
-    logger.info(
-        "A detailed log file can be found at: [b]%s[/b]",
-        context.GLOBAL.logfile,
-    )
+    log_handler.setup_logging(log_level, log_file)
+
     logger.info("Workdir: %s", workdir)
     for dirname in ["requests", "return-requests", "pods", "nodes", "events"]:
-        (pathlib.Path(workdir) / dirname).mkdir(parents=True, exist_ok=True)
-
-    context.GLOBAL.dirname = str(pathlib.Path(workdir) / "events")
-
-    ctx.obj = {
-        "workdir": workdir,
-        "proxy": proxy,
-        "templates": templates,
-    }
+        pathlib.Path(context.GLOBAL.workdir, dirname).mkdir(parents=True, exist_ok=True)
 
 
 @run.command()
-@click.pass_context
-def get_available_templates(ctx) -> None:
+def get_available_templates() -> None:
     """Get available hostfactory templates."""
-    templates = ctx.obj["templates"]
-    if templates is None:
+    if not context.GLOBAL.templates_path:
         raise click.UsageError(
-            'Option "hostfactory --templates" is required for get-available-templates.'
+            'Option "hostfactory --confdir" '
+            'or envvar "HF_K8S_PROVIDER_CONFDIR" is required.'
         )
-    response = hfapi.get_available_templates(templates)
+
+    response = hfapi.get_available_templates(context.GLOBAL.templates_path)
     logger.debug("get-available-templates response: %s", response)
     cli.output(json.dumps(response, indent=4))
 
 
 @run.command()
-@click.pass_context
 @click.argument(
     "json_file",
     type=click.File("r"),
@@ -124,15 +127,13 @@ def get_available_templates(ctx) -> None:
     default=sys.stdin,
 )
 @ON_EXCEPTIONS
-def request_machines(ctx, json_file) -> None:
+def request_machines(json_file) -> None:
     """Request machines based on the provided hostfactory input JSON file."""
-    workdir = ctx.obj["workdir"]
-    templates = ctx.obj["templates"]
-    if templates is None:
+    if not context.GLOBAL.templates_path:
         raise click.UsageError(
-            'Option "hostfactory --templates" is required for request-machines.'
+            'Option "hostfactory --confdir" '
+            'or envvar "HF_K8S_PROVIDER_CONFDIR" is required.'
         )
-
     file_content = json_file.read().rstrip("\n")
     request = json.loads(file_content)
     logger.info("request_machines: %s", request)
@@ -141,7 +142,9 @@ def request_machines(ctx, json_file) -> None:
     count = request["template"]["machineCount"]
     template_id = request["template"]["templateId"]
 
-    response = hfapi.request_machines(workdir, templates, template_id, count)
+    response = hfapi.request_machines(
+        context.GLOBAL.workdir, context.GLOBAL.templates_path, template_id, count
+    )
 
     logger.debug("request-machines response: %s", response)
 
@@ -149,7 +152,6 @@ def request_machines(ctx, json_file) -> None:
 
 
 @run.command()
-@click.pass_context
 @click.argument(
     "json_file",
     type=click.File("r"),
@@ -157,21 +159,19 @@ def request_machines(ctx, json_file) -> None:
     default=sys.stdin,
 )
 @ON_EXCEPTIONS
-def request_return_machines(ctx, json_file) -> None:
+def request_return_machines(json_file) -> None:
     """Request to return machines based on the provided hostfactory input JSON."""
-    workdir = ctx.obj["workdir"]
     request = json.load(json_file)
     logger.info("request_return_machines: %s", request)
     machines = request["machines"]
 
-    response = hfapi.request_return_machines(workdir, machines)
+    response = hfapi.request_return_machines(context.GLOBAL.workdir, machines)
 
     logger.debug("request-return-machines Response: %s", response)
     cli.output(json.dumps(response, indent=4))
 
 
 @run.command()
-@click.pass_context
 @click.argument(
     "json_file",
     type=click.File("r"),
@@ -179,22 +179,20 @@ def request_return_machines(ctx, json_file) -> None:
     default=sys.stdin,
 )
 @ON_EXCEPTIONS
-def get_request_status(ctx, json_file) -> None:
+def get_request_status(json_file) -> None:
     """Get the status of hostfactory requests."""
-    workdir = ctx.obj["workdir"]
     request = json.load(json_file)
     logger.info("get_request_status: %s", request)
 
     hf_req_ids = [req["requestId"] for req in request["requests"]]
 
-    response = hfapi.get_request_status(workdir, hf_req_ids)
+    response = hfapi.get_request_status(context.GLOBAL.workdir, hf_req_ids)
 
     logger.debug("get-request-status response: %s", response)
     cli.output(json.dumps(response, indent=4))
 
 
 @run.command()
-@click.pass_context
 @click.argument(
     "json_file",
     type=click.File("r"),
@@ -202,69 +200,63 @@ def get_request_status(ctx, json_file) -> None:
     default=sys.stdin,
 )
 @ON_EXCEPTIONS
-def get_return_requests(ctx, json_file) -> None:
+def get_return_requests(json_file) -> None:
     """Get the status of CSP claimed hosts."""
-    workdir = ctx.obj["workdir"]
     request = json.load(json_file)
 
     logger.info("get_return_requests: %s", request)
     machines = request["machines"]
-    response = hfapi.get_return_requests(workdir, machines)
+    response = hfapi.get_return_requests(context.GLOBAL.workdir, machines)
 
     logger.debug("get-return-requests response: %s", response)
     cli.output(json.dumps(response, indent=4))
 
 
 @run.group()
-@click.pass_context
-def watch(ctx) -> None:
+def watch() -> None:
     """Watch hostfactory events."""
-    del ctx
 
 
 @watch.command(name="pods")
-@click.pass_context
 @ON_EXCEPTIONS
-def watch_pods(ctx) -> None:
+def watch_pods() -> None:
     """Watch hostfactory pods."""
-    workdir = ctx.obj["workdir"]
-    k8sutils.load_k8s_config(ctx.obj["proxy"])
+    workdir = context.GLOBAL.workdir
+    k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf k8s pods at %s", workdir)
     hfwatcher.watch_pods(workdir)
 
 
 @watch.command(name="request-machines")
-@click.pass_context
 @ON_EXCEPTIONS
-def watch_request_machines(ctx) -> None:
+def watch_request_machines() -> None:
     """Watch for machine requests."""
-    workdir = ctx.obj["workdir"]
-    k8sutils.load_k8s_config(ctx.obj["proxy"])
+    workdir = context.GLOBAL.workdir
+    k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf request-machines at %s", workdir)
     hfwatcher.watch_requests(workdir)
 
 
 @watch.command(name="request-return-machines")
-@click.pass_context
 @ON_EXCEPTIONS
-def watch_request_return_machines(ctx) -> None:
+def watch_request_return_machines() -> None:
     """Watch for return machine requests."""
-    workdir = ctx.obj["workdir"]
-    k8sutils.load_k8s_config(ctx.obj["proxy"])
+    workdir = context.GLOBAL.workdir
+    k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf request-return-machines at %s", workdir)
     hfwatcher.watch_return_requests(workdir)
 
 
 @watch.command(name="events")
 @click.option("--dbfile", help="Events database file.")
-@click.pass_context
 @ON_EXCEPTIONS
-def events(ctx, dbfile) -> None:
+def events(dbfile) -> None:
     """Watch for hostfactory events."""
+    workdir = context.GLOBAL.workdir
     if not dbfile:
-        dbfile = pathlib.Path(ctx.obj["workdir"]) / "events.db"
+        dbfile = pathlib.Path(workdir) / "events.db"
 
-    dirname = pathlib.Path(ctx.obj["workdir"]) / "events"
+    dirname = pathlib.Path(workdir) / "events"
     dirname.mkdir(parents=True, exist_ok=True)
 
     context.GLOBAL.dirname = str(dirname)
@@ -276,11 +268,10 @@ def events(ctx, dbfile) -> None:
 
 
 @watch.command()
-@click.pass_context
 @ON_EXCEPTIONS
-def nodes(ctx) -> None:
+def nodes() -> None:
     """Watch for hostfactory nodes."""
-    workdir = ctx.obj["workdir"]
-    k8sutils.load_k8s_config(ctx.obj["proxy"])
+    workdir = context.GLOBAL.workdir
+    k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf k8s nodes at %s", workdir)
     hfwatcher.watch_nodes(workdir)

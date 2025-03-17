@@ -160,4 +160,177 @@ def _watch_events(stream, handler) -> None:
         logger.warning("Read timeout error. Restarting watcher.")
         return "0"
 
-    return None
+    logger.warning("End of events stream. Restarting watcher.")
+    return "0"
+
+
+def _parse_cpu_quantity(quantity: str) -> float:
+    """Parse the CPU quantity."""
+    if quantity.endswith("m"):
+        return int(quantity[:-1]) / 1000  # Convert millicores to cores
+    return float(quantity)  # Assume the quantity is already in cores
+
+
+def _parse_memory_quantity(quantity: str) -> int:  # noqa: PLR0911
+    """Parse the memory quantity."""
+    if quantity.endswith("Ki"):
+        return int(quantity[:-2]) * 1024  # Convert Ki to bytes
+    if quantity.endswith("Mi"):
+        return int(quantity[:-2]) * 1024 * 1024  # Convert Mi to bytes
+    if quantity.endswith("Gi"):
+        return int(quantity[:-2]) * 1024 * 1024 * 1024  # Convert Gi to bytes
+    if quantity.endswith("k"):
+        return int(quantity[:-1]) * 1000
+    if quantity.endswith("M"):
+        return int(quantity[:-1]) * 1000000
+    if quantity.endswith("G"):
+        return int(quantity[:-1]) * 1000000000
+    return int(quantity)  # Assume the quantity is already in bytes
+
+
+def get_total_pod_memory(pod) -> tuple[float, float]:
+    """Get the total memory of a pod.
+
+    Args:
+        pod (kubernetes.client.V1Pod): The pod object.
+
+    Returns:
+            tuple[float, float]: The total memory request and limit in MiB.
+    """
+    total_memory_request_bytes = 0
+    total_memory_limit_bytes = 0
+
+    if pod.spec.containers:
+        for container in pod.spec.containers:
+            if (
+                container.resources.requests
+                and "memory" in container.resources.requests
+            ):
+                total_memory_request_bytes += _parse_memory_quantity(
+                    container.resources.requests["memory"]
+                )
+            if container.resources.limits and "memory" in container.resources.limits:
+                total_memory_limit_bytes += _parse_memory_quantity(
+                    container.resources.limits["memory"]
+                )
+
+    return (
+        round((total_memory_request_bytes / (1024 * 1024)), 2),
+        round((total_memory_limit_bytes / (1024 * 1024)), 2),
+    )
+
+
+def get_total_pod_cpu(pod) -> tuple[float, float]:
+    """Get the total CPU of a pod.
+
+    Args:
+        pod (kubernetes.client.V1Pod): The pod object.
+
+    Returns:
+            tuple[float, float]: The total CPU request and limit in cores.
+    """
+    total_cpu_request = 0
+    total_cpu_limit = 0
+
+    if pod.spec.containers:
+        for container in pod.spec.containers:
+            if container.resources.requests and "cpu" in container.resources.requests:
+                total_cpu_request += _parse_cpu_quantity(
+                    container.resources.requests["cpu"]
+                )
+            if container.resources.limits and "cpu" in container.resources.limits:
+                total_cpu_limit += _parse_cpu_quantity(
+                    container.resources.limits["cpu"]
+                )
+
+    return (round(total_cpu_request, 2), round(total_cpu_limit, 2))
+
+
+def get_pod_container_statuses(pod) -> dict:
+    """Get the container statuses of a pod.
+
+    Args:
+        pod (kubernetes.client.V1Pod): The pod object.
+
+    Returns:
+        dict: The container statuses.
+    """
+    container_statuses = {}
+    if pod.status.container_statuses:
+        for status in pod.status.container_statuses:
+            container_status = {
+                "ready": status.ready,
+                "started": status.started,
+            }
+            if status.state.running:
+                container_status["state"] = "Running"
+            elif status.state.terminated:
+                container_status["state"] = "Terminated"
+                container_status["exit_code"] = status.state.terminated.exit_code
+                container_status["reason"] = status.state.terminated.reason
+            elif status.state.waiting:
+                container_status["state"] = "Waiting"
+                container_status["reason"] = status.state.waiting.reason
+
+            container_statuses[status.name] = container_status
+    return container_statuses
+
+
+def get_node_conditions(node) -> dict:
+    """Get the conditions of a node.
+
+    Args:
+        node (kubernetes.client.V1Node): The node object.
+
+    Returns:
+        dict: The node conditions.
+    """
+    node_conditions = {}
+    if node.status.conditions:
+        for condition in node.status.conditions:
+            node_conditions[condition.type] = {
+                "status": condition.status,
+                "reason": condition.reason,
+                "message": condition.message,
+            }
+    return node_conditions
+
+
+def get_node_memory_resources(node) -> dict:
+    """Get the memory resources of a node.
+
+    Args:
+        node (kubernetes.client.V1Node): The node object.
+
+    Returns:
+        dict: The memory capacity, allocatable and reserved in MiB.
+    """
+    memory_capacity_bytes = _parse_memory_quantity(node.status.capacity["memory"])
+    memory_allocatable_bytes = _parse_memory_quantity(node.status.allocatable["memory"])
+    memory_reserved_bytes = memory_capacity_bytes - memory_allocatable_bytes
+
+    return {
+        "capacity": round((memory_capacity_bytes / (1024 * 1024)), 2),
+        "allocatable": round((memory_allocatable_bytes / (1024 * 1024)), 2),
+        "reserved": round((memory_reserved_bytes / (1024 * 1024)), 2),
+    }
+
+
+def get_node_cpu_resources(node) -> dict:
+    """Get the CPU resources of a node.
+
+    Args:
+        node (kubernetes.client.V1Node): The node object.
+
+    Returns:
+        dict: The CPU capacity, allocatable and reserved in cores.
+    """
+    cpu_capacity = _parse_cpu_quantity(node.status.capacity["cpu"])
+    cpu_allocatable = _parse_cpu_quantity(node.status.allocatable["cpu"])
+    cpu_reserved = cpu_capacity - cpu_allocatable
+
+    return {
+        "capacity": round(cpu_capacity, 2),
+        "allocatable": round(cpu_allocatable, 2),
+        "reserved": round(cpu_reserved, 2),
+    }
