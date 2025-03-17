@@ -18,6 +18,7 @@ Functions:
 - watch_pods(workdir): Watch the status of pods associated with hostfactory.
 """
 
+import base64
 import datetime
 import json
 import logging
@@ -251,6 +252,15 @@ def _get_timestamp(data: datetime) -> int:
     return int(data.timestamp())
 
 
+def _write_message_to_file(message: str) -> str:
+    """Write message to file."""
+    with tempfile.NamedTemporaryFile(
+        delete=False, mode="w", encoding="utf-8"
+    ) as temp_file:
+        temp_file.write(message)
+    return temp_file.name
+
+
 def _push_pod_event(event: dict) -> None:
     """Push pod event to db."""
     data = event["object"]
@@ -262,7 +272,7 @@ def _push_pod_event(event: dict) -> None:
             "pod",
             pod_name,
             data.status.phase.lower(),
-            int(time.time()),
+            str(int(time.time())),
         )
     )
 
@@ -272,7 +282,7 @@ def _push_pod_event(event: dict) -> None:
                 "pod",
                 pod_name,
                 "created",
-                _get_timestamp(data.metadata.creation_timestamp),
+                str(_get_timestamp(data.metadata.creation_timestamp)),
             )
         )
 
@@ -282,7 +292,7 @@ def _push_pod_event(event: dict) -> None:
                 "pod",
                 pod_name,
                 "deleted",
-                _get_timestamp(data.metadata.deletion_timestamp),
+                str(_get_timestamp(data.metadata.deletion_timestamp)),
             )
         )
 
@@ -292,7 +302,7 @@ def _push_pod_event(event: dict) -> None:
                 "pod",
                 pod_name,
                 "node",
-                data.spec.node_name,
+                str(data.spec.node_name),
             )
         )
 
@@ -304,7 +314,7 @@ def _push_pod_event(event: dict) -> None:
                         "pod",
                         pod_name,
                         "scheduled",
-                        _get_timestamp(condition.last_transition_time),
+                        str(_get_timestamp(condition.last_transition_time)),
                     )
                 )
             if condition.type == "Ready" and condition.status == "True":
@@ -313,9 +323,85 @@ def _push_pod_event(event: dict) -> None:
                         "pod",
                         pod_name,
                         "ready",
-                        _get_timestamp(condition.last_transition_time),
+                        str(_get_timestamp(condition.last_transition_time)),
                     )
                 )
+            if condition.type == "DisruptionTarget":
+                events_to_push.extend(
+                    [
+                        (
+                            "pod",
+                            pod_name,
+                            "disrupted",
+                            str(_get_timestamp(condition.last_transition_time)),
+                        ),
+                        (
+                            "pod",
+                            pod_name,
+                            "disrupted_reason",
+                            str(condition.reason),
+                        ),
+                        (
+                            "pod",
+                            pod_name,
+                            "disrupted_message",
+                            base64.b64encode(
+                                _write_message_to_file(condition.message).encode(
+                                    "utf-8"
+                                )
+                            ).decode("utf-8"),
+                        ),
+                    ]
+                )
+
+    pod_cpu_core_request, pod_cpu_core_limit = k8sutils.get_total_pod_cpu(data)
+    pod_memory_mib_request, pod_memory_mib_limit = k8sutils.get_total_pod_memory(data)
+
+    events_to_push.extend(
+        [
+            (
+                "pod",
+                pod_name,
+                "cpu_requested",
+                str(pod_cpu_core_request),
+            ),
+            (
+                "pod",
+                pod_name,
+                "cpu_limit",
+                str(pod_cpu_core_limit),
+            ),
+            (
+                "pod",
+                pod_name,
+                "memory_requested",
+                str(
+                    pod_memory_mib_request,
+                ),
+            ),
+            (
+                "pod",
+                pod_name,
+                "memory_limit",
+                str(pod_memory_mib_limit),
+            ),
+        ]
+    )
+
+    container_statuses = k8sutils.get_pod_container_statuses(data)
+    if container_statuses:
+        events_to_push.append(
+            (
+                "pod",
+                pod_name,
+                "container_statuses",
+                base64.b64encode(
+                    _write_message_to_file(json.dumps(container_statuses)).encode(
+                        "utf-8"
+                    )
+                ).decode("utf-8"),
+            )
+        )
 
     hfevents.post_events(events_to_push)
 
@@ -332,7 +418,7 @@ def _push_node_event(event: dict) -> None:
                 "node",
                 node_id,
                 "created",
-                _get_timestamp(data.metadata.creation_timestamp),
+                str(_get_timestamp(data.metadata.creation_timestamp)),
             )
         )
 
@@ -342,7 +428,7 @@ def _push_node_event(event: dict) -> None:
                 "node",
                 node_id,
                 "deleted",
-                _get_timestamp(data.metadata.deletion_timestamp),
+                str(_get_timestamp(data.metadata.deletion_timestamp)),
             )
         )
 
@@ -353,11 +439,97 @@ def _push_node_event(event: dict) -> None:
                     "node",
                     node_id,
                     "ready",
-                    _get_timestamp(condition.last_transition_time),
+                    str(_get_timestamp(condition.last_transition_time)),
                 )
                 for condition in data.status.conditions
                 if condition.type == "Ready" and condition.status == "True"
             ]
         )
+
+    node_conditions = k8sutils.get_node_conditions(data)
+    if node_conditions:
+        events_to_push.append(
+            (
+                "node",
+                node_id,
+                "conditions",
+                base64.b64encode(
+                    _write_message_to_file(json.dumps(node_conditions)).encode("utf-8")
+                ).decode("utf-8"),
+            )
+        )
+
+    cpu_parameters = k8sutils.get_node_cpu_resources(data)
+    memory_parameters = k8sutils.get_node_memory_resources(data)
+
+    events_to_push.extend(
+        [
+            (
+                "node",
+                node_id,
+                "cpu_capacity",
+                str(cpu_parameters.get("capacity")),
+            ),
+            (
+                "node",
+                node_id,
+                "cpu_allocatable",
+                str(cpu_parameters.get("allocatable")),
+            ),
+            (
+                "node",
+                node_id,
+                "memory_capacity",
+                str(memory_parameters.get("capacity")),
+            ),
+            (
+                "node",
+                node_id,
+                "memory_allocatable",
+                str(memory_parameters.get("allocatable")),
+            ),
+            (
+                "node",
+                node_id,
+                "cpu_reserved",
+                str(cpu_parameters.get("reserved")),
+            ),
+            (
+                "node",
+                node_id,
+                "memory_reserved",
+                str(memory_parameters.get("reserved")),
+            ),
+        ]
+    )
+
+    events_to_push.extend(
+        [
+            (
+                "node",
+                node_id,
+                "aws_zone",
+                data.metadata.labels.get("topology.kubernetes.io/zone", None),
+            ),
+            (
+                "node",
+                node_id,
+                "aws_region",
+                data.metadata.labels.get("topology.kubernetes.io/region", None),
+            ),
+            (
+                "node",
+                node_id,
+                "node_size",
+                data.metadata.labels.get("node.kubernetes.io/instance-type", None),
+            ),
+            (
+                "node",
+                node_id,
+                "capacity_type",
+                data.metadata.labels.get("karpenter.sh/capacity-type", None),
+            ),
+        ]
+    )
 
     hfevents.post_events(events_to_push)

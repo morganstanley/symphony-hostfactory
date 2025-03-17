@@ -20,10 +20,12 @@ TODO: Should we consider jaeger/open-telemetry for tracing? Probably, but the
       able to compare them with subsequent runs.
 """
 
+import base64
 import logging
 import os
 import pathlib
 import sqlite3
+from typing import Callable
 
 import inotify.adapters
 
@@ -50,6 +52,7 @@ def init_events_db() -> None:
             request TEXT,
             return_request TEXT,
             node TEXT,
+            template_id TEXT,
             requested INTEGER,
             returned INTEGER,
             created INTEGER,
@@ -59,8 +62,16 @@ def init_events_db() -> None:
             running INTEGER,
             succeeded INTEGER,
             failed INTEGER,
+            disrupted INTEGER,
+            disrupted_reason TEXT,
+            disrupted_message TEXT,
+            container_statuses TEXT,
             unknown INTEGER,
-            ready INTEGER
+            ready INTEGER,
+            cpu_requested REAL,
+            cpu_limit REAL,
+            memory_requested REAL,
+            memory_limit REAL
         )
         """
     )
@@ -70,9 +81,20 @@ def init_events_db() -> None:
         CREATE TABLE IF NOT EXISTS nodes (
             node TEXT,
             uid TEXT,
+            node_size TEXT,
+            capacity_type TEXT,
+            aws_zone TEXT,
+            aws_region TEXT,
             created INTEGER,
             deleted INTEGER,
             ready INTEGER,
+            conditions TEXT,
+            cpu_capacity REAL,
+            cpu_allocatable REAL,
+            memory_capacity REAL,
+            memory_allocatable REAL,
+            cpu_reserved REAL,
+            memory_reserved REAL,
             PRIMARY KEY (node, uid)
         )
         """
@@ -85,7 +107,9 @@ def init_events_db() -> None:
             is_return_req INT,
             begin_time INT,
             end_time INT,
-            status TEXT
+            status TEXT,
+            count INT,
+            template_id TEXT
         )
         """
     )
@@ -113,6 +137,77 @@ def event_average(workdir, event_from, event_to):
     return cursor.fetchone()[0]
 
 
+def _get_event_data_from_file(filename: str) -> str:
+    """Returns the event data from a file"""
+    with pathlib.Path(filename).open("r", encoding="utf-8") as file:
+        return file.read()
+
+
+def _execute_sql(cursor, sql: str, params: tuple) -> None:
+    """Execute SQL statement."""
+    cursor.execute(sql, params)
+
+
+def _process_pod_event(cursor, ev_id, ev_key, ev_value) -> None:
+    """Process pod event."""
+    logger.info("Upsert pod: %s %s %s", ev_id, ev_key, ev_value)
+
+    if ev_key in ["disrupted_message", "container_statuses"]:
+        filename = base64.b64decode(ev_value).decode("utf-8")
+        ev_value = _get_event_data_from_file(filename)
+        logger.info("Event value from file %s: %s", filename, ev_value)
+
+    sql = f"""
+    INSERT INTO pods (pod, {ev_key}) VALUES (?, ?)
+    ON CONFLICT(pod)
+    DO UPDATE SET {ev_key} = ? WHERE pod = ?
+    """  # noqa: S608
+    params = (ev_id, ev_value, ev_value, ev_id)
+    if ev_key not in ["container_statuses"]:
+        sql += f" AND {ev_key} IS NULL"
+    _execute_sql(cursor, sql, params)
+
+
+def _process_node_event(cursor, ev_id, ev_key, ev_value) -> None:
+    """Process node event."""
+    node, uid = ev_id.split("::")
+    logger.info("Upsert node: %s %s %s %s", node, uid, ev_key, ev_value)
+
+    if ev_key in ["conditions"]:
+        filename = base64.b64decode(ev_value).decode("utf-8")
+        ev_value = _get_event_data_from_file(filename)
+        logger.info("Event value from file %s: %s", filename, ev_value)
+
+    sql = f"""
+    INSERT INTO nodes (node, uid, {ev_key}) VALUES (?, ?, ?)
+    ON CONFLICT(node, uid)
+    DO UPDATE SET {ev_key} = ? WHERE node = ? AND uid = ?
+    """  # noqa: S608
+    params = (node, uid, ev_value, ev_value, node, uid)
+    if ev_key not in ["conditions"]:
+        sql += f" AND {ev_key} IS NULL"
+    _execute_sql(cursor, sql, params)
+
+
+def _get_request_event_handler(is_return_req: int) -> Callable:
+    """Get request event handler."""
+
+    def _process_request_event(cursor, ev_id, ev_key, ev_value) -> None:
+        """Process request event."""
+        logger.info("Upsert request: %s %s %s", ev_id, ev_key, ev_value)
+
+        sql = f"""
+        INSERT INTO requests (request_id, is_return_req, {ev_key})
+        VALUES (?, ?, ?)
+        ON CONFLICT(request_id)
+        DO UPDATE SET {ev_key} = ? WHERE request_id = ?
+        """  # noqa: S608
+        params = (ev_id, is_return_req, ev_value, ev_value, ev_id)
+        _execute_sql(cursor, sql, params)
+
+    return _process_request_event
+
+
 def _process_events(path, conn, files) -> None:
     """Process events.
 
@@ -121,73 +216,25 @@ def _process_events(path, conn, files) -> None:
     """
     cursor = conn.cursor()
 
-    def _pod_event(cursor, ev_id, ev_key, ev_value) -> None:
-        """Process pod event."""
-        logger.info("Upsert pod: %s %s %s", ev_id, ev_key, ev_value)
-        cursor.execute(
-            f"""
-            INSERT INTO pods (pod, {ev_key}) VALUES (?, ?)
-            ON CONFLICT(pod)
-            DO UPDATE SET {ev_key} = ? WHERE pod = ? AND {ev_key} IS NULL
-            """,  # noqa: S608
-            (ev_id, ev_value, ev_value, ev_id),
-        )
-
-    def _node_event(cursor, ev_id, ev_key, ev_value) -> None:
-        """Process node event."""
-        node, uid = ev_id.split("::")
-        logger.info("Upsert node: %s %s %s %s", node, uid, ev_key, ev_value)
-        cursor.execute(
-            f"""
-            INSERT INTO nodes (node, uid, {ev_key}) VALUES (?, ?, ?)
-            ON CONFLICT(node, uid)
-            DO UPDATE SET {ev_key} = ?
-            WHERE node = ? AND uid = ? AND {ev_key} IS NULL
-            """,  # noqa: S608
-            (node, uid, ev_value, ev_value, node, uid),
-        )
-
-    def _request_event(cursor, ev_id, ev_key, ev_value) -> None:
-        """Process request event."""
-        logger.info("Upsert request: %s %s %s", ev_id, ev_key, ev_value)
-        cursor.execute(
-            f"""
-            INSERT INTO requests (request_id, is_return_req, {ev_key})
-            VALUES (?, ?, ?)
-            ON CONFLICT(request_id)
-            DO UPDATE SET {ev_key} = ? WHERE request_id = ?
-            """,  # noqa: S608
-            (ev_id, 0, ev_value, ev_value, ev_id),
-        )
-
-    def _return_event(cursor, ev_id, ev_key, ev_value) -> None:
-        """Process return request event."""
-        logger.info("Upsert return request: %s %s %s", ev_id, ev_key, ev_value)
-        cursor.execute(
-            f"""
-            INSERT INTO requests (request_id, is_return_req, {ev_key})
-            VALUES (?, ?, ?)
-            ON CONFLICT(request_id)
-            DO UPDATE SET {ev_key} = ? WHERE request_id = ?
-            """,  # noqa: S608
-            (ev_id, 1, ev_value, ev_value, ev_id),
-        )
-
     handlers = {
-        "pod": _pod_event,
-        "node": _node_event,
-        "request": _request_event,
-        "return": _return_event,
+        "pod": _process_pod_event,
+        "node": _process_node_event,
+        "request": _get_request_event_handler(0),
+        "return": _get_request_event_handler(1),
     }
 
     for filename in files:
         logger.info("Processing event: %s/%s", path, filename)
         ev_type, ev_id, ev_key, ev_value = filename.split("~")
 
-        handler = handlers.get(ev_type)
-        if not handler:
+        if not handlers.get(ev_type):
             logger.error("Unknown event type: %s", ev_type)
             continue
+
+        handler: Callable = handlers.get(ev_type)
+
+        if ev_value == "None":
+            ev_value = None
 
         handler(cursor, ev_id, ev_key, ev_value)
 
@@ -208,7 +255,7 @@ def process_events(watch=True) -> None:
         conn,
         [
             filename
-            for filename in os.listdir(str(context.GLOBAL.dirname))
+            for filename in os.listdir(str(context.GLOBAL.dirname))  # noqa: PTH208
             if not filename.startswith(".")
         ],
     )
@@ -229,7 +276,7 @@ def process_events(watch=True) -> None:
         _process_events(
             path,
             conn,
-            [filename for filename in os.listdir(path) if not filename.startswith(".")],
+            [filename for filename in os.listdir(path) if not filename.startswith(".")],  # noqa: PTH208
         )
 
 

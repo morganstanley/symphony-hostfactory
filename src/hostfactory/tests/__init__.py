@@ -17,22 +17,34 @@ import importlib
 import json
 import os
 import pathlib
+import pwd
+import shutil
 import tempfile
+from functools import cache
 
 from jinja2 import Template
 
 
+@cache
+def _get_tempdir() -> str:
+    return tempfile.mkdtemp()
+
+
+@cache
 def get_pod_spec(flavor: str = "vanilla") -> str:
     """Returns the absolute path to the pod spec"""
-    return str(
-        importlib.resources.files("hostfactory.tests.resources").joinpath(
-            f"{flavor}-spec.yml"
-        )
-    )
+    podspec_name = f"{flavor}-spec.yml"
+    resources = importlib.resources.files("hostfactory.tests.resources")
+    template_path = pathlib.Path(resources.joinpath(podspec_name))
+    temp_confdir = pathlib.Path(_get_tempdir())
+    podspec_template = Template(template_path.read_text())
+    podspec_path = temp_confdir / podspec_name
+    podspec_path.write_text(podspec_template.render(os.environ))
+    return str(podspec_path)
 
 
-def generate_templates(flavor: str = "vanilla") -> str:
-    """Creates a templates file and returns the path"""
+def generate_provider_conf(flavor: str = "vanilla") -> str:
+    """Generates a temp confdir with the templates file and returns the path"""
     templates_tpl = importlib.resources.files("hostfactory.tests.resources").joinpath(
         f"{flavor}-templates.tpl"
     )
@@ -44,11 +56,21 @@ def generate_templates(flavor: str = "vanilla") -> str:
         template_str = Template(data).render(podSpec=pod_spec_path)
         template_dict = json.loads(template_str)
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", delete=False, suffix=".json"
-    ) as json_file:
-        json.dump(template_dict, json_file)
-        return json_file.name
+    temp_confdir = pathlib.Path(_get_tempdir())
+    templates_path = temp_confdir / "k8sprov_templates.json"
+    with templates_path.open("w") as file:
+        json.dump(template_dict, file)
+
+    return str(temp_confdir)
+
+
+def cleanup_provider_conf() -> None:
+    """Removes the temp config dir if created, flushes the underlying caches"""
+    needs_cleanup = _get_tempdir.cache_info().currsize > 0
+    if needs_cleanup:
+        shutil.rmtree(_get_tempdir(), ignore_errors=True)
+    _get_tempdir.cache_clear()
+    get_pod_spec.cache_clear()
 
 
 def get_workdir() -> str:
@@ -56,7 +78,7 @@ def get_workdir() -> str:
     temp_dir = os.getenv("HF_K8S_WORKDIR")
     if temp_dir:
         return temp_dir
-
-    test_dir = pathlib.Path("/var/tmp/hostfactorytest/")  # noqa: S108
+    username = pwd.getpwuid(os.getuid()).pw_name
+    test_dir = pathlib.Path(f"/tmp/hostfactory-test-{username}/")  # noqa: S108
     test_dir.mkdir(parents=True, exist_ok=True)
     return str(test_dir)

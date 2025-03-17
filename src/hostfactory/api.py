@@ -37,7 +37,9 @@ def _generate_short_uuid() -> str:
         str: A short UUID string of length 12.
     """
     alphabet = string.ascii_lowercase + string.digits
-    return "".join(random.choices(alphabet, k=12))
+    return random.choice(string.ascii_lowercase) + "".join(
+        random.choices(alphabet, k=11)
+    )
 
 
 def _resolve_machine_status(pod, is_return_req) -> Tuple[str, str]:
@@ -76,15 +78,15 @@ def _resolve_machine_status(pod, is_return_req) -> Tuple[str, str]:
     return machine_status, machine_result
 
 
-def _mktempdir(workdir) -> pathlib.Path:
+def _mktempdir(workdir: pathlib.Path) -> pathlib.Path:
     """Create a temporary directory in the workdir."""
-    temp_dir = tempfile.mkdtemp(dir=workdir, prefix=".")
+    temp_dir = tempfile.mkdtemp(dir=str(workdir), prefix=".")
     return pathlib.Path(temp_dir)
 
 
-def _get_templates(templates) -> dict:
+def _get_templates(templates: pathlib.Path) -> dict:
     """Read and validate the templates file"""
-    with pathlib.Path(templates).open("r") as file:
+    with templates.open("r") as file:
         data = json.load(file)
         if not isinstance(data, dict):
             raise ValueError(
@@ -95,7 +97,9 @@ def _get_templates(templates) -> dict:
     return data
 
 
-def _write_podspec(tmp_path, templates, template_id) -> None:
+def _write_podspec(
+    tmp_path: pathlib.Path, templates: pathlib.Path, template_id: str
+) -> None:
     """Write the podspec file as part of the request."""
     templates_data = _get_templates(templates)["templates"]
     for t in templates_data:
@@ -113,7 +117,7 @@ def get_available_templates(templates):
     """Validates and returns the hostfactory templates file."""
     logger.info("Getting available templates: %s", templates)
 
-    return _get_templates(templates)
+    return _get_templates(pathlib.Path(templates))
 
 
 def request_machines(workdir, templates, template_id, count):
@@ -129,6 +133,8 @@ def request_machines(workdir, templates, template_id, count):
     hfevents.post_events(
         [
             ("request", request_id, "begin_time", int(time.time())),
+            ("request", request_id, "count", count),
+            ("request", request_id, "template_id", template_id),
         ]
     )
     logger.info("HF Request ID: %s - Requesting machines: %s", request_id, count)
@@ -136,9 +142,11 @@ def request_machines(workdir, templates, template_id, count):
     # The request id is generated, directory should not exist.
     #
     # TODO(andreik): handle error if directory already exists.
-    dst_path = pathlib.Path(workdir) / "requests" / request_id
-    tmp_path = _mktempdir(workdir)
-    _write_podspec(tmp_path, templates, template_id)
+    workdir_path = pathlib.Path(workdir)
+    templates_path = pathlib.Path(templates)
+    dst_path = workdir_path / "requests" / request_id
+    tmp_path = _mktempdir(workdir_path)
+    _write_podspec(tmp_path, templates_path, template_id)
 
     for machine_id in range(count):
         machine = f"{request_id}-{machine_id}"
@@ -148,6 +156,7 @@ def request_machines(workdir, templates, template_id, count):
             [
                 ("pod", machine, "request", request_id),
                 ("pod", machine, "requested", int(time.time())),
+                ("pod", machine, "template_id", template_id),
             ]
         )
 
@@ -175,9 +184,9 @@ def get_request_status(workdir, hf_req_ids):
     state, the status will be set to "complete_with_error".
     """
     # pylint: disable=too-many-locals
-
-    hf_reqs_dir = pathlib.Path(workdir) / "requests"
-    hf_return_reqs_dir = pathlib.Path(workdir) / "return-requests"
+    workdir_path = pathlib.Path(workdir)
+    hf_reqs_dir = workdir_path / "requests"
+    hf_return_reqs_dir = workdir_path / "return-requests"
     events_to_post = []
 
     response = {"requests": []}
@@ -272,8 +281,9 @@ def get_request_status(workdir, hf_req_ids):
 def request_return_machines(workdir, machines):
     """Request to return machines based on the provided hostfactory input JSON."""
     # TODO(andreik): duplicate code, create a function.
-    hf_pods_dir = pathlib.Path(workdir) / "pods"
-    hf_return_reqs_dir = pathlib.Path(workdir) / "return-requests"
+    workdir_path = pathlib.Path(workdir)
+    hf_pods_dir = workdir_path / "pods"
+    hf_return_reqs_dir = workdir_path / "return-requests"
 
     request_id = _generate_short_uuid()
     hfevents.post_events(
@@ -283,7 +293,7 @@ def request_return_machines(workdir, machines):
     )
     logger.info("Requesting to return machines: %s %s", request_id, machines)
 
-    tmp_path = _mktempdir(workdir)
+    tmp_path = _mktempdir(workdir_path)
     dst_path = hf_return_reqs_dir / request_id
 
     for index, machine in enumerate(machines):
