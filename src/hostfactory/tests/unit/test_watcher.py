@@ -86,7 +86,6 @@ class TestRequestMachinesWatcher(unittest.TestCase):
         calls = [
             mock.call(
                 self.req_dir / f"machine{i}",
-                self.req_dir.parent,
                 pathlib.Path(pod_spec_path),
             )
             for i in range(1, 4)

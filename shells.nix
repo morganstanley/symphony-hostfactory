@@ -12,10 +12,10 @@
   kubernetes-helm,
   openshift,
   s6,
-  python311,
+  python312,
 }:
 let
-  python = with python311.pkgs; [
+  python = with python312.pkgs; [
     # Project runtime dependencies.
     click
     kubernetes
@@ -23,10 +23,18 @@ let
     jinja2
     typing-extensions
     inotify
+    hatchling
+    rich
+    wrapt
+    pydantic
+    tenacity
 
     # TODO: add lint and test dependencies.
 
     # Standard python stuff.
+    coverage
+    pytest-cov
+    mypy
     pep517
     pip
     pytest
@@ -34,6 +42,7 @@ let
     pytest-mock
     setuptools
     wheel
+    ruff
   ];
 in
 let
@@ -60,7 +69,13 @@ let
       src="$(dirname "$(dirname "$out")")"
       cd "$src"
 
-      venv="$src"/.venv
+      if [[ "$VENV" ]]
+      then
+        venv="$VENV"
+      else
+        venv="$src/venv"
+      fi
+
       if test -w default.nix; then
 
         # Create a virtual environment and install the project
@@ -68,7 +83,9 @@ let
         python -mvenv "$venv"
         # shellcheck disable=SC1091
         source "$venv"/bin/activate
-        cd "$venv"/lib64/python3.11/site-packages
+
+        # TODO: need better heuristic to find venv site-packages.
+        cd "$venv"/lib64/python3.*/site-packages
 
         IFS=':' read -ra array <<< "$PYTHONPATH"
 

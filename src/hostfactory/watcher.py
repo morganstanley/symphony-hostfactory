@@ -26,6 +26,7 @@ import os
 import pathlib
 import tempfile
 import time
+from http import HTTPStatus
 from typing import Callable
 
 import inotify.adapters
@@ -39,7 +40,6 @@ from hostfactory import k8sutils
 logger = logging.getLogger(__name__)
 
 _HF_K8S_LABEL_KEY = "symphony/hostfactory-reqid"
-K8S_NOT_FOUND_CODE = 404
 
 
 def _process_pending_events(dirname, on_event) -> None:
@@ -82,7 +82,7 @@ def _watch_dir(dirname, on_event) -> None:
         (pathlib.Path(path) / filename / ".processed").touch()
 
 
-def _create_pod(machine, workdir, pod_spec) -> None:
+def _create_pod(machine, pod_spec) -> None:
     """Create pod."""
     logger.info("Creating pod for request: %s", machine.name)
     namespace = k8sutils.get_namespace()
@@ -94,10 +94,6 @@ def _create_pod(machine, workdir, pod_spec) -> None:
     pod_tpl["metadata"]["name"] = pod_name
     pod_tpl["metadata"]["labels"]["app"] = pod_name
     pod_tpl["metadata"]["labels"]["symphony/hostfactory-reqid"] = req_id
-
-    podfile = pathlib.Path(workdir).parent / "pods" / pod_name
-    podfile.touch()
-    hostfactory.atomic_symlink(podfile, machine)
 
     # TODO: Handle pod creation exceptions
     kubernetes.client.CoreV1Api().create_namespaced_pod(
@@ -114,7 +110,7 @@ def _delete_pod(pod_name) -> None:
             pod_name, namespace, body=kubernetes.client.V1DeleteOptions()
         )
     except kubernetes.client.rest.ApiException as exc:
-        if exc.status == K8S_NOT_FOUND_CODE:
+        if exc.status == HTTPStatus.NOT_FOUND:
             # Assume the pod is already deleted if not found
             logger.exception("Pod not found: %s", pod_name)
 
@@ -135,16 +131,20 @@ def _create_machine(request_dir, machine) -> None:
 
     if not podfile.exists():
         logger.info("Pod file does not exist: %s", podfile)
-        workdir = request_dir.parent
-        _create_pod(machine, workdir, pod_spec)
+        _create_pod(machine, pod_spec)
 
 
 def _return_machine(request_dir, machine) -> None:
     """Return machine."""
     machine_name = machine.name
     podfile = pathlib.Path(request_dir) / machine_name
+    deleted_pods_path = request_dir.parent / "deleted-pods"
 
     try:
+        if (deleted_pods_path / machine_name).exists():
+            logger.info("Pod already deleted: %s", machine_name)
+            return
+
         with podfile.open("r") as file:
             pod = json.load(file)
             if pod["status"]["phase"].lower() in ["failed", "unknown"]:
@@ -191,9 +191,27 @@ def watch_return_requests(workdir) -> None:
     _watch_dir(str(dirname), _process_return_machine_request)
 
 
+def _mark_deleted(eventdir, data) -> None:
+    """Mark pod/node as deleted."""
+    obj_name = data.metadata.name
+    obj_file = pathlib.Path(eventdir) / obj_name
+    if not obj_file.exists():
+        logger.info("File does not exist: %s", obj_file)
+        return
+    eventdir_path = pathlib.Path(eventdir)
+    deleted_obj_path = eventdir_path.parent / f"deleted-{eventdir_path.name}" / obj_name
+    obj_file.replace(deleted_obj_path)
+    hostfactory.atomic_symlink("deleted", obj_file)
+
+
 def _put_event_data(eventdir, data) -> pathlib.Path:
     """Upsert event metadata to the eventdir."""
-    event_filepath = pathlib.Path(eventdir, data.metadata.name)
+    if data.kind == "Event":
+        event_filepath = pathlib.Path(
+            eventdir, data.involved_object.kind, data.involved_object.name
+        )
+    else:
+        event_filepath = pathlib.Path(eventdir, data.metadata.name)
 
     with tempfile.NamedTemporaryFile(delete=False, dir=eventdir) as tf:
         tf.write(
@@ -227,20 +245,48 @@ def watch_nodes(workdir) -> None:
     )
 
 
+def watch_kube_events(workdir) -> None:
+    """Watch for kubernetes events."""
+    hfeventsdir = pathlib.Path(workdir) / "kube-events"
+    k8sutils.watch_kube_events(
+        field_selector="involvedObject.kind=Node",
+        handler=_make_event_handler(hfeventsdir, _push_kube_event),
+    )
+
+
 def _make_event_handler(eventdir, db_handler) -> Callable[[dict], None]:
     """Create a handler for events."""
 
     def _handler(event: dict) -> None:
         """Update the event status in the eventdir directory."""
         data = event["object"]
-        logger.info("Event: %s %s", event["type"], data.metadata.name)
+        if data.kind == "Event":
+            involved_object = data.involved_object
+            if not involved_object.name:
+                logger.warning(
+                    "Missing Involved object name. Skipping event %s.",
+                    data.metadata.name,
+                )
+                return
+            logger.info(
+                "Event: %s %s %s %s",
+                event["type"],
+                data.metadata.name,
+                involved_object.kind,
+                involved_object.name,
+            )
+        else:
+            logger.info("Event: %s %s %s", event["type"], data.kind, data.metadata.name)
 
         if event["type"] == "ERROR":
             logger.error("Error occurred while watching events: %s", data)
             return
 
-        if event["type"] in ["ADDED", "MODIFIED", "DELETED"]:
+        if event["type"] in ["ADDED", "MODIFIED"]:
             _put_event_data(eventdir, data)
+
+        if event["type"] == "DELETED":
+            _mark_deleted(eventdir, data)
 
         db_handler(event)
 
@@ -297,13 +343,22 @@ def _push_pod_event(event: dict) -> None:
         )
 
     if data.spec.node_name:
-        events_to_push.append(
-            (
-                "pod",
-                pod_name,
-                "node",
-                str(data.spec.node_name),
-            )
+        node_uid = k8sutils.get_node_uid(data.spec.node_name)
+        events_to_push.extend(
+            [
+                (
+                    "pod",
+                    pod_name,
+                    "node",
+                    str(data.spec.node_name),
+                ),
+                (
+                    "pod",
+                    pod_name,
+                    "node_uid",
+                    str(node_uid),
+                ),
+            ]
         )
 
     if data.status.conditions:
@@ -508,13 +563,13 @@ def _push_node_event(event: dict) -> None:
             (
                 "node",
                 node_id,
-                "aws_zone",
+                "zone",
                 data.metadata.labels.get("topology.kubernetes.io/zone", None),
             ),
             (
                 "node",
                 node_id,
-                "aws_region",
+                "region",
                 data.metadata.labels.get("topology.kubernetes.io/region", None),
             ),
             (
@@ -531,5 +586,51 @@ def _push_node_event(event: dict) -> None:
             ),
         ]
     )
+
+    hfevents.post_events(events_to_push)
+
+
+def _push_kube_event(event: dict) -> None:
+    """Push kubernetes event to db."""
+    data = event["object"]
+    involved_object = data.involved_object
+    if involved_object.name == involved_object.uid:
+        logger.warning("Skipping event %s with missing object uid.", data.metadata.name)
+        return
+    node_id = f"{involved_object.name}::{involved_object.uid}"
+    events_to_push = []
+
+    if involved_object.kind == "Node":
+        parsed_node_event = k8sutils.parse_node_event(data)
+        if parsed_node_event["message"] == "Disrupting Node: Underutilized/Delete":
+            events_to_push.append(
+                (
+                    "node",
+                    node_id,
+                    "eviction_uderutilized",
+                    str(parsed_node_event["timestamp"]),
+                )
+            )
+        if parsed_node_event["message"] == "Disrupting Node: Empty/Delete":
+            events_to_push.append(
+                (
+                    "node",
+                    node_id,
+                    "eviction_empty",
+                    str(parsed_node_event["timestamp"]),
+                )
+            )
+        events_to_push.append(
+            (
+                "node",
+                node_id,
+                "events",
+                base64.b64encode(
+                    _write_message_to_file(json.dumps(parsed_node_event)).encode(
+                        "utf-8"
+                    )
+                ).decode("utf-8"),
+            )
+        )
 
     hfevents.post_events(events_to_push)

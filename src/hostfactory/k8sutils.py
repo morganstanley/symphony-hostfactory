@@ -16,13 +16,35 @@ Common k8s helper functions.
 import logging
 import os
 import pathlib
+from http import HTTPStatus
 
 import kubernetes
 import urllib3
+from tenacity import before_sleep_log
+from tenacity import retry
+from tenacity import retry_if_exception_type
+from tenacity import retry_if_result
+from tenacity import stop_after_attempt
+from tenacity import wait_exponential
 
 logger = logging.getLogger(__name__)
 
-K8S_RESOURCE_VERSION_MISMATCH_CODE = 410
+K8S_RESOURCE_VERSION_MISMATCH_CODE = HTTPStatus.GONE
+RETRYABLE_HTTP_ERROR_CODES = (
+    HTTPStatus.REQUEST_TIMEOUT,
+    HTTPStatus.TOO_EARLY,
+    HTTPStatus.TOO_MANY_REQUESTS,
+    HTTPStatus.INTERNAL_SERVER_ERROR,
+    HTTPStatus.NOT_IMPLEMENTED,
+    HTTPStatus.BAD_GATEWAY,
+    HTTPStatus.SERVICE_UNAVAILABLE,
+    HTTPStatus.GATEWAY_TIMEOUT,
+)
+RETRYABLE_EXCEPTIONS = (
+    kubernetes.client.exceptions.ApiException,
+    urllib3.exceptions.ReadTimeoutError,
+    urllib3.exceptions.ProtocolError,
+)
 
 
 def _proxy_url() -> str:
@@ -43,6 +65,12 @@ def is_inside_pod() -> bool:
     return pathlib.Path("/var/run/secrets/kubernetes.io").exists()
 
 
+@retry(
+    wait=wait_exponential(),
+    stop=stop_after_attempt(5),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
 def load_k8s_config(proxy_url: str = None) -> None:
     """Load Kubernetes Credentials."""
     if is_inside_pod():
@@ -86,6 +114,16 @@ def get_namespace() -> str:
     return namespace
 
 
+@retry(
+    wait=wait_exponential(),
+    stop=stop_after_attempt(5),
+    retry=(
+        retry_if_exception_type(RETRYABLE_EXCEPTIONS)
+        | retry_if_result(lambda resp: resp in RETRYABLE_HTTP_ERROR_CODES)
+    ),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
 def watch_pods(label_selector, handler, namespace):
     """Watch for pods based on label selector."""
     resource_version = "0"
@@ -97,11 +135,40 @@ def watch_pods(label_selector, handler, namespace):
             break
 
 
+@retry(
+    wait=wait_exponential(),
+    stop=stop_after_attempt(5),
+    retry=(
+        retry_if_exception_type(RETRYABLE_EXCEPTIONS)
+        | retry_if_result(lambda resp: resp in RETRYABLE_HTTP_ERROR_CODES)
+    ),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
 def watch_nodes(label_selector, handler):
     """Watch for nodes based on label selector."""
     resource_version = "0"
     while True:
         resource_version = _watch_nodes(label_selector, handler, resource_version)
+        if resource_version is None:
+            break
+
+
+@retry(
+    wait=wait_exponential(),
+    stop=stop_after_attempt(5),
+    retry=(
+        retry_if_exception_type(RETRYABLE_EXCEPTIONS)
+        | retry_if_result(lambda resp: resp in RETRYABLE_HTTP_ERROR_CODES)
+    ),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
+def watch_kube_events(field_selector, handler):
+    """Watch for events based on label selector."""
+    resource_version = "0"
+    while True:
+        resource_version = _watch_kube_events(field_selector, handler, resource_version)
         if resource_version is None:
             break
 
@@ -137,6 +204,21 @@ def _watch_nodes(label_selector, handler, resource_version) -> None:
     )
 
 
+def _watch_kube_events(field_selector, handler, resource_version) -> None:
+    """Watch for events based on label selector."""
+    coreapi = kubernetes.client.CoreV1Api()
+    watch = kubernetes.watch.Watch()
+    return _watch_events(
+        watch.stream(
+            coreapi.list_event_for_all_namespaces,
+            field_selector=field_selector,
+            resource_version=resource_version,
+            timeout_seconds=0,
+        ),
+        handler,
+    )
+
+
 def _watch_events(stream, handler) -> None:
     """Watch for events based on stream."""
     try:
@@ -153,12 +235,6 @@ def _watch_events(stream, handler) -> None:
             # Return the resource version to restart the watcher.
             return resource_version
         raise
-    except urllib3.exceptions.ProtocolError as _protocol_error:
-        logger.warning("Protocol error. Restarting watcher.")
-        return "0"
-    except urllib3.exceptions.ReadTimeoutError as _read_timeout_error:
-        logger.warning("Read timeout error. Restarting watcher.")
-        return "0"
 
     logger.warning("End of events stream. Restarting watcher.")
     return "0"
@@ -334,3 +410,56 @@ def get_node_cpu_resources(node) -> dict:
         "allocatable": round(cpu_allocatable, 2),
         "reserved": round(cpu_reserved, 2),
     }
+
+
+def parse_node_event(event) -> dict:
+    """Parse a node event.
+
+    Args:
+        event (kubernetes.client.V1Event): The event object.
+
+    Returns:
+        dict: The parsed node event.
+    """
+    return {
+        "type": event.type,
+        "reason": event.reason,
+        "message": event.message,
+        "source": event.reporting_component,
+        "timestamp": int(event.metadata.creation_timestamp.timestamp()),
+    }
+
+
+@retry(
+    wait=wait_exponential(),
+    stop=stop_after_attempt(5),
+    retry=(
+        retry_if_exception_type(RETRYABLE_EXCEPTIONS)
+        | retry_if_result(lambda resp: resp in RETRYABLE_HTTP_ERROR_CODES)
+    ),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
+def get_node_uid(node_name: str) -> str:
+    """Get the UID of a node
+
+    Args:
+        node_name (str): The name of the node.
+
+    Returns:
+        str: The UID of the node.
+    """
+    try:
+        coreapi = kubernetes.client.CoreV1Api()
+        node = coreapi.read_node(node_name)
+        return node.metadata.uid
+    except kubernetes.client.exceptions.ApiException as exc:
+        if exc.status in [
+            HTTPStatus.FORBIDDEN,
+            HTTPStatus.UNAUTHORIZED,
+            HTTPStatus.NOT_FOUND,
+        ]:
+            logger.error("Failed to get node UID: %s", str(exc))
+            return None
+
+        raise

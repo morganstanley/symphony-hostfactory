@@ -13,7 +13,6 @@ requests and pods in a Kubernetes cluster.
 Test hostfactory api module.
 """
 
-import json
 import pathlib
 from unittest import mock
 
@@ -74,27 +73,80 @@ def test_generate_short_uuid() -> None:
     assert uuid01 != uuid02
 
 
+def test_get_machines_dir() -> None:
+    """Test get machines dir."""
+    workdir = pathlib.Path(get_workdir())
+    request_id = "req1"
+
+    req1_dir = workdir / "requests" / request_id
+    req1_dir.mkdir(parents=True, exist_ok=True)
+
+    machines_dir = api._get_machines_dir(workdir, request_id)
+    assert machines_dir == (req1_dir, False)
+
+    req1_dir.rmdir()
+    req1_dir = workdir / "return-requests" / request_id
+    req1_dir.mkdir(parents=True, exist_ok=True)
+
+    machines_dir = api._get_machines_dir(workdir, request_id)
+    assert machines_dir == (req1_dir, True)
+
+    req1_dir.rmdir()
+
+    with pytest.raises(FileNotFoundError, match=r"Request directory not found:"):
+        api._get_machines_dir(workdir, request_id)
+
+
 def test_resolve_machine_status() -> None:
     """Test resolve machine status."""
     test_cases = [
-        ({"status": {"phase": "Pending"}}, "running", "succeed", False),
-        ({"status": {"phase": "Running"}}, "running", "succeed", False),
-        ({"status": {"phase": "Succeeded"}}, "terminated", "succeed", False),
-        ({"status": {"phase": "Failed"}}, "terminated", "fail", False),
-        ({"status": {"phase": "Unknown"}}, "terminated", "fail", False),
-        ({"status": {"phase": "Pending"}}, "running", "succeed", True),
-        ({"status": {"phase": "Running"}}, "running", "succeed", True),
-        ({"status": {"phase": "Succeeded"}}, "terminated", "succeed", True),
-        ({"status": {"phase": "Failed"}}, "terminated", "succeed", True),
-        ({"status": {"phase": "Unknown"}}, "terminated", "succeed", True),
+        ("creating", "running", "executing", False),
+        ("pending", "running", "executing", False),
+        ("running", "running", "succeed", False),
+        ("succeeded", "terminated", "succeed", False),
+        ("failed", "terminated", "fail", False),
+        ("unknown", "terminated", "fail", False),
+        ("pending", "running", "executing", True),
+        ("running", "running", "executing", True),
+        ("succeeded", "terminated", "succeed", True),
+        ("failed", "terminated", "succeed", True),
+        ("unknown", "terminated", "succeed", True),
+        ("deleted", "terminated", "succeed", True),
+        ("deleted", "terminated", "fail", False),
     ]
 
-    for pod, expected_status, expected_result, is_return_req in test_cases:
+    for pod_status, expected_status, expected_result, is_return_req in test_cases:
         machine_status, machine_result = api._resolve_machine_status(
-            pod, is_return_req=is_return_req
+            pod_status, is_return_req=is_return_req
         )
         assert machine_status == expected_status
         assert machine_result == expected_result
+
+
+@mock.patch(
+    "pathlib.Path.open",
+    new_callable=mock.mock_open,
+    read_data='{"name": "pod1", "status": "running"}',
+)
+def test_load_pod_file(mock_open) -> None:
+    """Test load pod file."""
+    workdir = pathlib.Path(get_workdir())
+    mock_path = mock.Mock(spec=pathlib.Path)
+    mock_path.return_value = workdir / "pod1"
+    mock_path.exists.return_value = True
+    mock_path.is_symlink.return_value = False
+
+    pod_data = api._load_pod_file(workdir, "pod1")
+
+    mock_open.assert_called_once_with("r", encoding="utf-8")
+    assert pod_data == {"name": "pod1", "status": "running"}
+
+    mock_path.readlink.return_value = workdir / "pod1"
+    mock_path.readlink.name.return_value = "deleted"
+    mock_path.is_symlink.return_value = True
+
+    pod_data = api._load_pod_file(workdir, "pod1")
+    assert pod_data == {"name": "pod1", "status": "running"}
 
 
 def test_write_pod_spec() -> None:
@@ -151,6 +203,7 @@ def test_request_machines(  # noqa: PLR0913
     mock_get_template_file.assert_called_once_with(pathlib.Path(templates))
     tempdir = pathlib.Path("/path/to/workdir/tempdir")
     requestdir = pathlib.Path("/path/to/workdir/requests/mock_request_id")
+    podsdir = pathlib.Path("/path/to/workdir/pods")
 
     mock_path_write_text.assert_called_once()
     mock_path_write_text.assert_called_with("pod-spec.yaml")
@@ -160,13 +213,16 @@ def test_request_machines(  # noqa: PLR0913
     request_id = response["requestId"]
     assert request_id == "mock_request_id"
 
-    assert mock_atomic_symlink.call_count == 3
+    assert mock_atomic_symlink.call_count == 6
     expected_symlink_calls = [
-        mock.call("pending", tempdir / "mock_request_id-0"),
-        mock.call("pending", tempdir / "mock_request_id-1"),
-        mock.call("pending", tempdir / "mock_request_id-2"),
+        mock.call(podsdir / "mock_request_id-0", tempdir / "mock_request_id-0"),
+        mock.call(podsdir / "mock_request_id-1", tempdir / "mock_request_id-1"),
+        mock.call(podsdir / "mock_request_id-2", tempdir / "mock_request_id-2"),
+        mock.call("creating", podsdir / "mock_request_id-0"),
+        mock.call("creating", podsdir / "mock_request_id-1"),
+        mock.call("creating", podsdir / "mock_request_id-2"),
     ]
-    mock_atomic_symlink.assert_has_calls(expected_symlink_calls)
+    mock_atomic_symlink.assert_has_calls(expected_symlink_calls, any_order=True)
 
 
 @mock.patch("hostfactory.events.post_events", return_value=None)
@@ -213,28 +269,31 @@ def test_request_return_machines(
 
 
 @mock.patch("hostfactory.events.post_events", return_value=None)
-@mock.patch("hostfactory.api.pathlib.Path.exists")
-@mock.patch("hostfactory.api.pathlib.Path.iterdir")
 @mock.patch(
-    "hostfactory.api.pathlib.Path.open",
-    new_callable=mock.mock_open,
-    read_data=json.dumps(mock_pod),
+    "hostfactory.api._get_machines_dir",
+    return_value=(pathlib.Path("/path/to/workdir"), False),
 )
-@mock.patch("hostfactory.api._resolve_machine_status")
+@mock.patch(
+    "hostfactory.api._resolve_machine_status", return_value=("running", "succeed")
+)
+@mock.patch("hostfactory.api._load_pod_file", return_value=mock_pod)
+@mock.patch("hostfactory.api.pathlib.Path.iterdir", return_value=[pathlib.Path("pod1")])
+@mock.patch("hostfactory.api.pathlib.Path.exists", return_value=True)
+@mock.patch("hostfactory.api.pathlib.Path.readlink", return_value=pathlib.Path("pod1"))
+@mock.patch("hostfactory.api.pathlib.Path.is_symlink", return_value=False)
 def test_get_request_status(
+    _mock_is_symlink,
+    _mock_readlink,
+    _mock_exists,
+    _mock_iterdir,
+    mock_load_pod_file,
     mock_resolve_machine_status,
-    mock_open,
-    mock_iterdir,
-    mock_exists,
+    mock_get_machines_dir,
     _mock_post_events,
 ) -> None:
     """Test get request status."""
     workdir = "/path/to/workdir"
     hf_req_ids = ["req1"]
-
-    mock_exists.return_value = True
-    mock_iterdir.return_value = [pathlib.Path("machine1")]
-    mock_resolve_machine_status.return_value = ("running", "succeed")
     # TODO: (zaidn) Add more cases to test different statuses.
     expected_response = {
         "requests": [
@@ -251,28 +310,27 @@ def test_get_request_status(
                         "privateIpAddress": "192.168.1.1",
                         "publicIpAddress": "",
                         "launchtime": "1739212317",
-                        "message": "Allocated by K8s hostfactory - ns: n1",
+                        "message": "Allocated by K8s hostfactory",
                     }
                 ],
             }
         ]
     }
 
-    # Call the function
     response = api.get_request_status(workdir, hf_req_ids)
 
-    # Assertions
+    mock_load_pod_file.assert_called_once()
+    mock_load_pod_file.assert_called_with(pathlib.Path(workdir), "pod1")
+    mock_resolve_machine_status.assert_called_once()
+    mock_resolve_machine_status.assert_called_with("running", False)
+    mock_get_machines_dir.assert_called_once()
+    mock_get_machines_dir.assert_called_with(pathlib.Path(workdir), "req1")
     assert response == expected_response
-    mock_exists.assert_called()
-    mock_iterdir.assert_called()
-    mock_open.assert_called()
-    mock_resolve_machine_status.assert_called()
 
 
 @mock.patch("hostfactory.api.pathlib.Path.exists")
 @mock.patch("hostfactory.api.pathlib.Path.iterdir")
-@mock.patch("hostfactory.api.pathlib.Path.open", new_callable=mock.mock_open)
-def test_get_return_requests(mock_open, mock_iterdir, mock_exists) -> None:
+def test_get_return_requests(mock_iterdir, mock_exists) -> None:
     """Test get_return_requests."""
     machines = [
         {"machineId": "machine-0", "name": "pod1"},
@@ -282,26 +340,9 @@ def test_get_return_requests(mock_open, mock_iterdir, mock_exists) -> None:
 
     mock_exists.return_value = True
     mock_iterdir.return_value = [
-        pathlib.Path("file1"),
-        pathlib.Path("file2"),
-        pathlib.Path("file3"),
-    ]
-    mock_open.side_effect = [
-        mock.mock_open(
-            read_data=json.dumps(
-                {"metadata": {"name": "pod1"}, "status": {"phase": "Running"}}
-            )
-        ).return_value,
-        mock.mock_open(
-            read_data=json.dumps(
-                {"metadata": {"name": "pod2"}, "status": {"phase": "Running"}}
-            )
-        ).return_value,
-        mock.mock_open(
-            read_data=json.dumps(
-                {"metadata": {"name": "pod4"}, "status": {"phase": "Running"}}
-            )
-        ).return_value,
+        pathlib.Path("pod1"),
+        pathlib.Path("pod2"),
+        pathlib.Path("pod4"),
     ]
 
     response = api.get_return_requests("/path/to/workdir", machines)

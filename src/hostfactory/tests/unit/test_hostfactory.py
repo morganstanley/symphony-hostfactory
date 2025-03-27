@@ -19,7 +19,6 @@ import re
 import shutil
 import tempfile
 import unittest
-from unittest import mock
 
 import click.testing
 
@@ -50,7 +49,7 @@ def _run_cli(module, args) -> click.testing.Result:
     )
 
 
-class TestGetAavailableTemplates(unittest.TestCase):
+class TestGetAvailableTemplates(unittest.TestCase):
     """Validate Hostfactory api functions"""
 
     def setUp(self) -> None:
@@ -138,8 +137,6 @@ class TestRequestMachines(unittest.TestCase):
         ).exists()
 
 
-@mock.patch("hostfactory.k8sutils.load_k8s_config", return_value=None)
-@mock.patch("hostfactory.k8sutils.get_namespace", return_value="test-namespace")
 class TestRequestReturnMachines(unittest.TestCase):
     """Validate Hostfactory api functions"""
 
@@ -163,7 +160,7 @@ class TestRequestReturnMachines(unittest.TestCase):
         """Clean up the test environment."""
         shutil.rmtree(self.workdir, ignore_errors=True)
 
-    def test_request_return_machines(self, _1, _2) -> None:
+    def test_request_return_machines(self) -> None:
         """Test case for the `request_machines` function.
         This test case verifies the behavior of the `request_machines` function
         by invoking it with a sample input and checking the output.

@@ -1,12 +1,12 @@
 {
   callPackages,
-  python311,
+  python312,
   nix-gitignore,
 }:
 let
   shells = callPackages ./shells.nix { };
 
-  py = python311;
+  py = python312;
 
   hostfactory = py.pkgs.buildPythonPackage rec {
     pname = "hostfactory";
@@ -52,6 +52,7 @@ let
       wrapt
       rich
       pydantic
+      tenacity
     ];
   };
 in

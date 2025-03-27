@@ -21,6 +21,7 @@ TODO: Should we consider jaeger/open-telemetry for tracing? Probably, but the
 """
 
 import base64
+import json
 import logging
 import os
 import pathlib
@@ -28,6 +29,11 @@ import sqlite3
 from typing import Callable
 
 import inotify.adapters
+from tenacity import before_sleep_log
+from tenacity import retry
+from tenacity import retry_if_exception_type
+from tenacity import stop_after_attempt
+from tenacity import wait_exponential
 
 from hostfactory.cli import context
 
@@ -52,6 +58,7 @@ def init_events_db() -> None:
             request TEXT,
             return_request TEXT,
             node TEXT,
+            node_uid TEXT,
             template_id TEXT,
             requested INTEGER,
             returned INTEGER,
@@ -63,6 +70,7 @@ def init_events_db() -> None:
             succeeded INTEGER,
             failed INTEGER,
             disrupted INTEGER,
+            timed_out INTEGER,
             disrupted_reason TEXT,
             disrupted_message TEXT,
             container_statuses TEXT,
@@ -83,8 +91,8 @@ def init_events_db() -> None:
             uid TEXT,
             node_size TEXT,
             capacity_type TEXT,
-            aws_zone TEXT,
-            aws_region TEXT,
+            zone TEXT,
+            region TEXT,
             created INTEGER,
             deleted INTEGER,
             ready INTEGER,
@@ -95,6 +103,9 @@ def init_events_db() -> None:
             memory_allocatable REAL,
             cpu_reserved REAL,
             memory_reserved REAL,
+            eviction_empty INTEGER,
+            eviction_uderutilized INTEGER,
+            events TEXT,
             PRIMARY KEY (node, uid)
         )
         """
@@ -173,19 +184,52 @@ def _process_node_event(cursor, ev_id, ev_key, ev_value) -> None:
     node, uid = ev_id.split("::")
     logger.info("Upsert node: %s %s %s %s", node, uid, ev_key, ev_value)
 
-    if ev_key in ["conditions"]:
+    if ev_key in [
+        "conditions",
+        "events",
+    ]:
         filename = base64.b64decode(ev_value).decode("utf-8")
         ev_value = _get_event_data_from_file(filename)
         logger.info("Event value from file %s: %s", filename, ev_value)
 
-    sql = f"""
-    INSERT INTO nodes (node, uid, {ev_key}) VALUES (?, ?, ?)
-    ON CONFLICT(node, uid)
-    DO UPDATE SET {ev_key} = ? WHERE node = ? AND uid = ?
-    """  # noqa: S608
-    params = (node, uid, ev_value, ev_value, node, uid)
-    if ev_key not in ["conditions"]:
-        sql += f" AND {ev_key} IS NULL"
+    if ev_key == "events":
+        # Load the existing events from the database
+        cursor.execute(
+            "SELECT events FROM nodes WHERE node = ? AND uid = ?", (node, uid)
+        )
+        row = cursor.fetchone()
+
+        existing_events = json.loads(row[0]) if row and row[0] else []
+
+        # Append the new event to the existing events
+        existing_events.append(json.loads(ev_value))
+
+        # Convert the updated events list back to a JSON string
+        updated_events = json.dumps(existing_events)
+
+        # Update the events column in the database
+        sql = """
+        INSERT INTO nodes (node, uid, events) VALUES (?, ?, ?)
+        ON CONFLICT(node, uid)
+        DO UPDATE SET events = ? WHERE node = ? AND uid = ?
+        """
+        params = (node, uid, updated_events, updated_events, node, uid)
+
+    elif ev_key == "conditions":
+        sql = f"""
+        INSERT INTO nodes (node, uid, {ev_key}) VALUES (?, ?, ?)
+        ON CONFLICT(node, uid)
+        DO UPDATE SET {ev_key} = ? WHERE node = ? AND uid = ?
+        """  # noqa: S608
+        params = (node, uid, ev_value, ev_value, node, uid)
+    else:
+        sql = f"""
+        INSERT INTO nodes (node, uid, {ev_key}) VALUES (?, ?, ?)
+        ON CONFLICT(node, uid)
+        DO UPDATE SET {ev_key} = ? WHERE node = ? AND uid = ? AND {ev_key} IS NULL
+        """  # noqa: S608
+        params = (node, uid, ev_value, ev_value, node, uid)
+
     _execute_sql(cursor, sql, params)
 
 
@@ -244,6 +288,13 @@ def _process_events(path, conn, files) -> None:
         os.unlink(os.path.join(path, filename))  # noqa: PTH108, PTH118
 
 
+@retry(
+    retry=retry_if_exception_type(sqlite3.OperationalError),
+    wait=wait_exponential(),
+    stop=stop_after_attempt(5),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
 def process_events(watch=True) -> None:
     """Process events."""
     logger.info("Processing events: %s", context.GLOBAL.dirname)

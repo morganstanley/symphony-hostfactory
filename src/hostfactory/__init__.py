@@ -24,15 +24,13 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from typing import Callable
+from typing import Tuple
 from typing import TypeVar
 
 import click
-from typing_extensions import TypeAlias
 
 _DecoratedFuncT = TypeVar("_DecoratedFuncT", bound=Callable[..., Any])
-_ExceptionHandler: TypeAlias = (
-    "tuple[type[Exception], None | str | Callable[[Exception], str]]"
-)
+type _ExceptionHandler = Tuple[type[Exception], None | str | Callable[[Exception], str]]
 
 logger = logging.getLogger(__name__)
 EXIT_CODE_DEFAULT = 1
