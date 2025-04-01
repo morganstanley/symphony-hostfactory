@@ -13,6 +13,8 @@ requests and pods in a Kubernetes cluster.
 Test processing of events.
 """
 
+import json
+import pathlib
 import tempfile
 from contextlib import closing
 
@@ -20,31 +22,67 @@ from hostfactory import events
 from hostfactory.cli import context
 
 
-def test_pod_events() -> None:
-    """Test pod events."""
+def test_post_event() -> None:
+    """Test pod events in directory"""
     with tempfile.TemporaryDirectory() as dirname:
-        context.GLOBAL.dbfile = ":memory:"
         context.GLOBAL.dirname = dirname
-        events.init_events_db()
 
-        events.post_events([("pod", "abcd-0", "request", "abcd")])
-        events.process_events(watch=False)
+        events.post_event(
+            category="pod",
+            id="abcd-0",
+            request="abcd",
+        )
 
-        with closing(context.GLOBAL.conn.cursor()) as cur:
-            cur.execute("SELECT request, pending FROM pods")
-            result = cur.fetchone()
-            assert result == (
-                "abcd",
-                None,
-            )
+        found = False
+        for eventfile in pathlib.Path(dirname).iterdir():
+            if eventfile.name[0] == ".":
+                continue
+            payload = json.loads(eventfile.read_text())
+            assert isinstance(payload, list | tuple)
+            assert len(payload) == 1
+            event = payload[0]
+            assert event["category"] == "pod"
+            assert event["id"] == "abcd-0"
+            assert event["request"] == "abcd"
+            found = True
+        assert found
 
-        events.post_events([("pod", "abcd-0", "pending", 10001)])
-        events.process_events(watch=False)
 
-        with closing(context.GLOBAL.conn.cursor()) as cur:
-            cur.execute("SELECT request, pending FROM pods")
-            result = cur.fetchone()
-            assert result == (
-                "abcd",
-                10001,
-            )
+def test_sqlite_events_backend() -> None:
+    """Test pod events with sqlite."""
+    backend = events.SqliteEventBackend(":memory:")
+    backend.post(
+        {
+            "category": "pod",
+            "id": "abcd-0",
+            "request": "abcd",
+        }
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events")
+        result = cur.fetchone()
+        assert result == (
+            "pod",
+            "abcd-0",
+            "request",
+            "abcd",
+        )
+
+    backend.post(
+        {
+            "category": "pod",
+            "id": "abcd-0",
+            "pending": 10001,
+        }
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events WHERE type='pending'")
+        result = cur.fetchone()
+        assert result == (
+            "pod",
+            "abcd-0",
+            "pending",
+            "10001",
+        )

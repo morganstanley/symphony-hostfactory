@@ -17,7 +17,6 @@ import importlib
 import json
 import os
 import pathlib
-import pwd
 import shutil
 import tempfile
 from functools import cache
@@ -78,7 +77,11 @@ def get_workdir() -> str:
     temp_dir = os.getenv("HF_K8S_WORKDIR")
     if temp_dir:
         return temp_dir
-    username = pwd.getpwuid(os.getuid()).pw_name
-    test_dir = pathlib.Path(f"/tmp/hostfactory-test-{username}/")  # noqa: S108
+
+    if os.getenv("USER"):
+        test_dir = pathlib.Path(f"/tmp/hostfactory-test-{os.getenv('USER')}/")  # noqa: S108
+    else:
+        test_dir = pathlib.Path("/tmp/hostfactory-test/")  # noqa: S108
+
     test_dir.mkdir(parents=True, exist_ok=True)
     return str(test_dir)

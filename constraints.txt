@@ -226,3 +226,4 @@ wrapt==1.16.0
     # via hostfactory (pyproject.toml)
 zipp==3.21.0
     # via importlib-metadata
+tenacity==9.0.0

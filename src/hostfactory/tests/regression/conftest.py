@@ -16,7 +16,9 @@ Test configuration for regression testing
 from __future__ import annotations
 
 import logging
+import pathlib
 import random
+import sqlite3
 import tempfile
 import threading
 from functools import partial
@@ -28,7 +30,6 @@ import yaml
 
 from hostfactory.cli.hf import run as hostfactory
 from hostfactory.cli.hfadmin import run as hfadmin
-from hostfactory.events import event_average
 from hostfactory.impl.hfadmin import delete_pods_in_namespace
 from hostfactory.impl.hfadmin import drain_node_in_namespace
 from hostfactory.impl.hfadmin import get_pods_in_current_namespace
@@ -240,6 +241,29 @@ def matches_pod_count(expected_pod_count: int) -> bool:
     return current_pod_count == expected_pod_count
 
 
+def find_event_average(workdir, event_from, event_to):
+    """Calculate average time between two type of events"""
+    dbfile = pathlib.Path(workdir) / "events.db"
+    conn = None
+    try:
+        conn = sqlite3.connect(dbfile)
+        sql = f"""
+        select avg(t2.timestamp - t1.timestamp) from
+            (select id, min(timestamp) as timestamp from
+                events where category='pod' and type='status' and value='{event_from}'
+                    group by id) as t1
+            join
+            (select id, min(timestamp) as timestamp from
+                events where category='pod' and type='status' and value='{event_to}'
+                    group by id) as t2
+            on t1.id = t2.id
+        """  # noqa: S608
+        return conn.execute(sql).fetchone()[0]
+    finally:
+        if conn:
+            conn.close()
+
+
 def verify_timings(expected_timings: dict) -> None:
     """Verifies the timings of the requests."""
     logger.info("Expected_timings are %s", expected_timings)
@@ -247,7 +271,7 @@ def verify_timings(expected_timings: dict) -> None:
         from_event = expected_timing["from"]
         to_event = expected_timing["to"]
         expected_average = expected_timing["average"]
-        actual_average = event_average(
+        actual_average = find_event_average(
             get_workdir(), event_from=from_event, event_to=to_event
         )
         assert actual_average < expected_average
