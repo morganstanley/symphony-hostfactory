@@ -80,14 +80,15 @@ class TestRequestMachinesWatcher(unittest.TestCase):
 
         mock_inotify.event_gen.return_value = _read_all_events(self.inotify_inst)
 
-        hostfactory.watcher.watch_requests(self.workdir)
+        mock_k8s_client = mock.MagicMock()
+        hostfactory.watcher.watch_requests(self.workdir, mock_k8s_client)
 
         assert mock_create_pod.call_count == 3
         calls = [
             mock.call(
                 self.req_dir / f"machine{i}",
-                self.req_dir.parent,
                 pathlib.Path(pod_spec_path),
+                mock_k8s_client,
             )
             for i in range(1, 4)
         ]
@@ -131,10 +132,11 @@ class TestRequestReturnMachinesWatcher(unittest.TestCase):
 
         mock_inotify.event_gen.return_value = _read_all_events(self.inotify_inst)
 
-        hostfactory.watcher.watch_return_requests(self.workdir)
+        mock_k8s_client = mock.MagicMock()
+        hostfactory.watcher.watch_return_requests(self.workdir, mock_k8s_client)
 
         assert mock_delete_pod.call_count == 3
-        calls = [mock.call(f"machine{i}") for i in range(1, 4)]
+        calls = [mock.call(f"machine{i}", mock_k8s_client) for i in range(1, 4)]
         mock_delete_pod.assert_has_calls(calls, any_order=True)
 
         assert pathlib.Path(self.req_dir / ".processed").exists()

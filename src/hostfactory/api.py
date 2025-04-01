@@ -19,7 +19,6 @@ import pathlib
 import random
 import string
 import tempfile
-import time
 from typing import Tuple
 
 import hostfactory
@@ -42,7 +41,49 @@ def _generate_short_uuid() -> str:
     )
 
 
-def _resolve_machine_status(pod, is_return_req) -> Tuple[str, str]:
+def _load_pod_file(workdir: pathlib.Path, pod_name: str) -> dict:
+    """Loads the pod file"""
+    hf_pods_dir = workdir / "pods"
+    deleted_hf_pods_dir = workdir / "deleted-pods"
+    pod_path = hf_pods_dir / pod_name
+
+    if pod_path.is_symlink():
+        if pod_path.readlink().name == "deleted":
+            pod_path = deleted_hf_pods_dir / pod_name
+            # Assume the pod timed out.
+            if not pod_path.exists():
+                return {}
+        elif pod_path.readlink().name == "creating":
+            logger.info("Machine is still in creating state: %s", pod_name)
+            return {}
+        else:
+            raise ValueError("Invalid symlink: %s", pod_path)
+
+    logger.debug("Loading pod file: %s", pod_path)
+    with pod_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _get_machines_dir(
+    workdir: pathlib.Path, request_id: str
+) -> Tuple[pathlib.Path, bool]:
+    """Get the machines directory based on the request id."""
+    hf_reqs_dir = workdir / "requests"
+    hf_return_reqs_dir = workdir / "return-requests"
+
+    is_return_req = False
+    machines_dir = hf_reqs_dir / request_id
+    if not machines_dir.exists():
+        is_return_req = True
+        machines_dir = hf_return_reqs_dir / request_id
+
+    if not machines_dir.exists():
+        raise FileNotFoundError(f"Request directory not found: {machines_dir}")
+
+    return machines_dir, is_return_req
+
+
+def _resolve_machine_status(pod_status: str, is_return_req: bool) -> Tuple[str, str]:
     """Resolve the machine status based on the pod status.
 
     machine_result: Status of hf request related to this machine.
@@ -51,29 +92,34 @@ def _resolve_machine_status(pod, is_return_req) -> Tuple[str, str]:
     machine_status : Status of machine.
     Expected values: running, stopped, terminated, shutting-down, stopping.
     """
+    if not pod_status:
+        return "terminated", "fail"
+
     machine_results_map = {
-        "pending": "succeed",
+        "creating": "executing",
+        "pending": "executing",
         "running": "succeed",
         "succeeded": "succeed",
         "failed": "fail",
         "unknown": "fail",
+        "deleted": "fail",
     }
 
     machine_status_map = {
+        "creating": "running",
         "pending": "running",
         "running": "running",
         "succeeded": "terminated",
         "failed": "terminated",
         "unknown": "terminated",
+        "deleted": "terminated",
     }
-    # TODO: capture all pod condition edge cases.
-    pod_phase = pod["status"]["phase"].lower()
 
-    machine_result = machine_results_map.get(pod_phase, "fail")
-    machine_status = machine_status_map.get(pod_phase, "terminated")
+    machine_status = machine_status_map.get(pod_status, "terminated")
+    machine_result = machine_results_map.get(pod_status, "fail")
 
-    if is_return_req and machine_status == "terminated":
-        machine_result = "succeed"
+    if is_return_req:
+        machine_result = "succeed" if machine_status == "terminated" else "executing"
 
     return machine_status, machine_result
 
@@ -130,12 +176,11 @@ def request_machines(workdir, templates, template_id, count):
 
     """
     request_id = _generate_short_uuid()
-    hfevents.post_events(
-        [
-            ("request", request_id, "begin_time", int(time.time())),
-            ("request", request_id, "count", count),
-            ("request", request_id, "template_id", template_id),
-        ]
+    hfevents.post_event(
+        category="request",
+        id=request_id,
+        count=count,
+        template_id=template_id,
     )
     logger.info("HF Request ID: %s - Requesting machines: %s", request_id, count)
 
@@ -146,19 +191,23 @@ def request_machines(workdir, templates, template_id, count):
     templates_path = pathlib.Path(templates)
     dst_path = workdir_path / "requests" / request_id
     tmp_path = _mktempdir(workdir_path)
+
     _write_podspec(tmp_path, templates_path, template_id)
 
-    for machine_id in range(count):
-        machine = f"{request_id}-{machine_id}"
-        hostfactory.atomic_symlink("pending", tmp_path / machine)
+    with hfevents.EventsBuffer() as events:
+        for machine_id in range(count):
+            machine = f"{request_id}-{machine_id}"
 
-        hfevents.post_events(
-            [
-                ("pod", machine, "request", request_id),
-                ("pod", machine, "requested", int(time.time())),
-                ("pod", machine, "template_id", template_id),
-            ]
-        )
+            podfile = workdir_path / "pods" / machine
+            hostfactory.atomic_symlink(podfile, tmp_path / machine)
+            hostfactory.atomic_symlink("creating", podfile)
+
+            events.post(
+                category="pod",
+                id=machine,
+                request_id=request_id,
+                template_id=template_id,
+            )
 
     tmp_path.rename(dst_path)
 
@@ -185,8 +234,6 @@ def get_request_status(workdir, hf_req_ids):
     """
     # pylint: disable=too-many-locals
     workdir_path = pathlib.Path(workdir)
-    hf_reqs_dir = workdir_path / "requests"
-    hf_return_reqs_dir = workdir_path / "return-requests"
     events_to_post = []
 
     response = {"requests": []}
@@ -203,55 +250,56 @@ def get_request_status(workdir, hf_req_ids):
         # failed based on the machines status.
         req_state = 0
 
-        ret_request = True
-        machines_dir = hf_return_reqs_dir / request_id
+        machines_dir, ret_request = _get_machines_dir(workdir_path, request_id)
         if not machines_dir.exists():
-            ret_request = False
-            machines_dir = hf_reqs_dir / request_id
-
-        if not machines_dir.exists():
-            logger.error("Invalid request_id: %s", request_id)
+            logger.info("Request directory not found: %s", machines_dir)
             continue
-
         logger.debug("Checking machines in: %s", machines_dir)
 
         for file_path in machines_dir.iterdir():
-            filename = file_path.name
-            if filename.startswith("."):
+            if file_path.name.startswith("."):
                 continue
 
             # Check if the machine is tracked by the watcher.
             # If not, assume the machine is in pending state.
             # TODO: Check if not a broken symlink.
-            if file_path.is_symlink() and not file_path.resolve().is_file():
-                logger.info("Pod file is not created yet: %s", file_path)
-                req_state |= state_running
+
+            podfile_path = file_path.readlink()
+            podname = podfile_path.name
+
+            pod_status = ""
+            pod = _load_pod_file(workdir_path, podname)
+
+            if podfile_path.is_symlink():
+                pod_status = podfile_path.readlink().name
+            elif podfile_path.exists():
+                pod_status = pod.get("status", {}).get("phase", "unknown").lower()
+            else:
+                logger.info("Machine not found with podfile: %s", podfile_path)
                 continue
 
-            with file_path.open("r", encoding="utf-8") as f:
-                pod = json.load(f)
-                if not pod["spec"]["node_name"] or pod["status"]["phase"] == "Pending":
-                    req_state |= state_running
-                    logger.info("Pod is not allocated to a node yet: %s", file_path)
+            machine_status, machine_result = _resolve_machine_status(
+                pod_status, ret_request
+            )
+
+            if machine_result == "executing":
+                req_state |= state_running
+                # Machine can be omitted if request is still executing.
+                if not ret_request:
                     continue
 
-            machine_status, machine_result = _resolve_machine_status(pod, ret_request)
-            if machine_result == "failed":
+            if machine_result == "fail":
                 req_state |= state_failed
 
-            pod_name = pod["metadata"]["name"]
-            pod_uid = pod["metadata"]["uid"]
-            namespace = pod["metadata"]["namespace"]
-
             machine = {
-                "machineId": pod_uid,
-                "name": pod_name,
+                "machineId": pod["metadata"]["uid"] if pod else "",
+                "name": pod["metadata"]["name"] if pod else podname,
                 "result": machine_result,
                 "status": machine_status,
-                "privateIpAddress": pod["status"]["pod_ip"],
+                "privateIpAddress": pod.get("status").get("pod_ip", "") if pod else "",
                 "publicIpAddress": "",
-                "launchtime": pod["metadata"]["creation_timestamp"],
-                "message": f"Allocated by K8s hostfactory - ns: {namespace}",
+                "launchtime": pod["metadata"]["creation_timestamp"] if pod else "",
+                "message": "Allocated by K8s hostfactory",
             }
             machines.append(machine)
 
@@ -268,11 +316,13 @@ def get_request_status(workdir, hf_req_ids):
         response["requests"].append(req_status)
 
         event_type = "return" if ret_request else "request"
-        events_to_post.append((event_type, request_id, "status", status))
-        if status in ["complete", "complete_with_error"]:
-            events_to_post.append(
-                (event_type, request_id, "end_time", int(time.time()))
-            )
+        events_to_post.append(
+            {
+                "category": event_type,
+                "id": request_id,
+                "status": status,
+            }
+        )
 
     hfevents.post_events(events_to_post)
     return response
@@ -286,31 +336,30 @@ def request_return_machines(workdir, machines):
     hf_return_reqs_dir = workdir_path / "return-requests"
 
     request_id = _generate_short_uuid()
-    hfevents.post_events(
-        [
-            ("return", request_id, "begin_time", int(time.time())),
-        ]
-    )
-    logger.info("Requesting to return machines: %s %s", request_id, machines)
-
-    tmp_path = _mktempdir(workdir_path)
-    dst_path = hf_return_reqs_dir / request_id
-
-    for index, machine in enumerate(machines):
-        machine_name = machine["name"]
-        file_path = tmp_path / f"{request_id}-{index}"
-        podfile = hf_pods_dir / machine_name
-        if podfile.exists():
-            hostfactory.atomic_symlink(podfile, file_path)
-        else:
-            logger.info("Machine not found with podfile: %s", podfile)
-
-        hfevents.post_events(
-            [
-                ("pod", machine_name, "return_request", request_id),
-                ("pod", machine_name, "returned", int(time.time())),
-            ]
+    with hfevents.EventsBuffer() as events:
+        events.post(
+            category="return",
+            id=request_id,
         )
+        logger.info("Requesting to return machines: %s %s", request_id, machines)
+
+        tmp_path = _mktempdir(workdir_path)
+        dst_path = hf_return_reqs_dir / request_id
+
+        for index, machine in enumerate(machines):
+            machine_name = machine["name"]
+            file_path = tmp_path / f"{request_id}-{index}"
+            podfile = hf_pods_dir / machine_name
+            if podfile.exists() or podfile.is_symlink():
+                hostfactory.atomic_symlink(podfile, file_path)
+            else:
+                logger.info("Machine not found with podfile: %s", podfile)
+
+            events.post(
+                category="pod",
+                id=machine_name,
+                return_id=request_id,
+            )
 
     tmp_path.rename(dst_path)
 
@@ -327,13 +376,14 @@ def get_return_requests(workdir, machines):
     actual = set()
     if pods_dir.exists():
         for file_path in pods_dir.iterdir():
-            with file_path.open("r", encoding="utf-8") as f:
-                pod = json.load(f)
-                pod_phase = pod.get("status", {}).get("phase", "")
-                if pod_phase and pod_phase.lower() not in ["unknown"]:
-                    actual.add(pod["metadata"]["name"])
-                else:
-                    continue
+            if file_path.name.startswith("."):
+                continue
+            if file_path.is_symlink() and file_path.readlink().name == "deleted":
+                continue
+
+            actual.add(file_path.name)
+    else:
+        raise FileNotFoundError(f"Pods directory not found: {pods_dir}")
 
     extra = known - actual
 

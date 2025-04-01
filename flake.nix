@@ -1,9 +1,10 @@
 {
   inputs = {
-    nixpkgs = {
-      type = "indirect";
-      id = "nixpkgs";
-    };
+    nixpkgs.url = "git+http://nix@stashblue.ms.com:11990/atlassian-stash/scm/nix_nixpkgs/nixpkgs.git?ref=ms/nixos-24.11";
+    # nixpkgs = {
+    #   type = "indirect";
+    #   id = "nixpkgs";
+    # };
   };
   outputs =
     {

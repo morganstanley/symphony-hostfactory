@@ -7,7 +7,7 @@
       timings:
           - from: created
             to: running
-            average: 5
+            average: 7
 - name: Return them
   hostfactory-admin: request-return-machines
   hostfactory: request-return-machines

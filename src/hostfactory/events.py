@@ -20,270 +20,251 @@ TODO: Should we consider jaeger/open-telemetry for tracing? Probably, but the
       able to compare them with subsequent runs.
 """
 
-import base64
+import json
 import logging
 import os
 import pathlib
 import sqlite3
-from typing import Callable
+import sys
+from time import time
+from typing import Any
+from uuid import uuid4
 
 import inotify.adapters
+from tenacity import before_sleep_log
+from tenacity import retry
+from tenacity import retry_if_exception_type
+from tenacity import stop_after_attempt
+from tenacity import wait_exponential
 
+from hostfactory import atomic_write
 from hostfactory.cli import context
 
 logger = logging.getLogger(__name__)
 
 
-def init_events_db() -> None:
-    """Initialize database."""
-    dbfile = context.GLOBAL.dbfile
+def _extract_metadata(src) -> dict[str, str]:
+    metadata = {}
+    prefix = "HF_K8S_METADATA_"
+    for k, v in src.items():
+        if k.startswith(prefix):
+            suffix = k[len(prefix) :]
+            if suffix:
+                metadata[suffix.lower()] = v
+    return metadata
 
-    if dbfile is None:
-        raise ValueError("Database file path is not provided.")
 
-    logger.info("Initialize database: %s", dbfile)
-    conn = sqlite3.connect(dbfile)
-    cursor = conn.cursor()
+EXTRA_METADATA = _extract_metadata(os.environ)
 
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS pods (
-            pod TEXT PRIMARY KEY,
-            request TEXT,
-            return_request TEXT,
-            node TEXT,
-            template_id TEXT,
-            requested INTEGER,
-            returned INTEGER,
-            created INTEGER,
-            deleted INTEGER,
-            scheduled INTEGER,
-            pending INTEGER,
-            running INTEGER,
-            succeeded INTEGER,
-            failed INTEGER,
-            disrupted INTEGER,
-            disrupted_reason TEXT,
-            disrupted_message TEXT,
-            container_statuses TEXT,
-            unknown INTEGER,
-            ready INTEGER,
-            cpu_requested REAL,
-            cpu_limit REAL,
-            memory_requested REAL,
-            memory_limit REAL
+
+class ConsoleEventBackend:
+    """Dump events to console, intended for debugging"""
+
+    def __init__(self, use_stderr=False, indent=None) -> None:
+        """Init the console backend"""
+        self.fd = sys.stderr if use_stderr else sys.stdout
+        self.indent = indent
+
+    def post(self, event):
+        """Post event to the console"""
+        print(json.dumps(event, indent=self.indent), file=self.fd, flush=True)
+
+    def close(self):
+        """N/A"""
+
+
+class SqliteEventBackend:
+    """Dump events into a SQLite db"""
+
+    def __init__(self, dbfile=None) -> None:
+        """Initialize database."""
+        dbfile = dbfile or context.GLOBAL.dbfile
+
+        if dbfile is None:
+            raise ValueError("Database file path is not provided.")
+
+        logger.info("Initialize database: %s", dbfile)
+        pathlib.Path(dbfile).parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(dbfile)
+
+        with self.conn as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    hf_namespace TEXT,
+                    hf_pod TEXT,
+                    category TEXT,
+                    id TEXT,
+                    timestamp INT,
+                    type TEXT,
+                    value TEXT
+                )
+                """
+            )
+
+        self.known_columns = frozenset(
+            (
+                "hf_namespace",
+                "hf_pod",
+                "category",
+                "id",
+                "timestamp",
+            )
         )
-        """
+
+    def post(self, event):
+        """Post given event to the underlying SQLite db"""
+        known = []
+        rows = []
+        for k, v in event.items():
+            if k in self.known_columns:
+                known.append((k, v))
+            else:
+                rows.append((k, v))
+
+        if not rows:
+            return
+
+        names = [i[0] for i in known]
+        names.append("type")
+        names.append("value")
+        values = [i[1] for i in known]
+        values.append(None)
+        values.append(None)
+        assert len(names) == len(values)  # noqa: S101
+        names_str = ",".join(names)
+        values_str = ",".join("?" for _ in range(len(values)))
+        sql = f"INSERT INTO events ({names_str}) VALUES ({values_str})"  # noqa: S608
+        with self.conn as conn:
+            for t, v in rows:
+                values[-2] = t
+                values[-1] = v
+                conn.execute(sql, tuple(values))
+
+    def close(self):
+        """Close the db"""
+        self.conn.close()
+        self.conn = None
+
+
+def _pending_events(eventdir) -> tuple[pathlib.Path]:
+    return tuple(
+        child
+        for child in pathlib.Path(eventdir).iterdir()
+        if child.is_file() and child.name[0] != "."
     )
 
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS nodes (
-            node TEXT,
-            uid TEXT,
-            node_size TEXT,
-            capacity_type TEXT,
-            aws_zone TEXT,
-            aws_region TEXT,
-            created INTEGER,
-            deleted INTEGER,
-            ready INTEGER,
-            conditions TEXT,
-            cpu_capacity REAL,
-            cpu_allocatable REAL,
-            memory_capacity REAL,
-            memory_allocatable REAL,
-            cpu_reserved REAL,
-            memory_reserved REAL,
-            PRIMARY KEY (node, uid)
-        )
-        """
-    )
 
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS requests (
-            request_id TEXT PRIMARY KEY,
-            is_return_req INT,
-            begin_time INT,
-            end_time INT,
-            status TEXT,
-            count INT,
-            template_id TEXT
-        )
-        """
-    )
-
-    conn.commit()
-    context.GLOBAL.conn = conn
+def _process_events(backends, eventfiles) -> None:
+    for eventfile in eventfiles:
+        logger.info("Processing event in: %s", eventfile)
+        try:
+            try:
+                events = json.loads(eventfile.read_text())
+            except ValueError:
+                continue
+            if not isinstance(events, list | tuple):
+                events = [events]
+            for backend in backends:
+                for event in events:
+                    backend.post(event)
+        finally:
+            eventfile.unlink(missing_ok=True)
 
 
-def event_average(workdir, event_from, event_to):
-    """Returns the average time between two events given a connection"""
-    dbfile = pathlib.Path(workdir) / "events.db"
-
-    dirname = pathlib.Path(workdir) / "events"
-    dirname.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(dbfile)
-    cursor = conn.cursor()
-
-    cursor.execute(
-        f"""
-        SELECT AVG({event_to} - {event_from}) AS avg_time_seconds
-        FROM pods
-        """  # noqa: S608
-    )
-    return cursor.fetchone()[0]
-
-
-def _get_event_data_from_file(filename: str) -> str:
-    """Returns the event data from a file"""
-    with pathlib.Path(filename).open("r", encoding="utf-8") as file:
-        return file.read()
-
-
-def _execute_sql(cursor, sql: str, params: tuple) -> None:
-    """Execute SQL statement."""
-    cursor.execute(sql, params)
-
-
-def _process_pod_event(cursor, ev_id, ev_key, ev_value) -> None:
-    """Process pod event."""
-    logger.info("Upsert pod: %s %s %s", ev_id, ev_key, ev_value)
-
-    if ev_key in ["disrupted_message", "container_statuses"]:
-        filename = base64.b64decode(ev_value).decode("utf-8")
-        ev_value = _get_event_data_from_file(filename)
-        logger.info("Event value from file %s: %s", filename, ev_value)
-
-    sql = f"""
-    INSERT INTO pods (pod, {ev_key}) VALUES (?, ?)
-    ON CONFLICT(pod)
-    DO UPDATE SET {ev_key} = ? WHERE pod = ?
-    """  # noqa: S608
-    params = (ev_id, ev_value, ev_value, ev_id)
-    if ev_key not in ["container_statuses"]:
-        sql += f" AND {ev_key} IS NULL"
-    _execute_sql(cursor, sql, params)
-
-
-def _process_node_event(cursor, ev_id, ev_key, ev_value) -> None:
-    """Process node event."""
-    node, uid = ev_id.split("::")
-    logger.info("Upsert node: %s %s %s %s", node, uid, ev_key, ev_value)
-
-    if ev_key in ["conditions"]:
-        filename = base64.b64decode(ev_value).decode("utf-8")
-        ev_value = _get_event_data_from_file(filename)
-        logger.info("Event value from file %s: %s", filename, ev_value)
-
-    sql = f"""
-    INSERT INTO nodes (node, uid, {ev_key}) VALUES (?, ?, ?)
-    ON CONFLICT(node, uid)
-    DO UPDATE SET {ev_key} = ? WHERE node = ? AND uid = ?
-    """  # noqa: S608
-    params = (node, uid, ev_value, ev_value, node, uid)
-    if ev_key not in ["conditions"]:
-        sql += f" AND {ev_key} IS NULL"
-    _execute_sql(cursor, sql, params)
-
-
-def _get_request_event_handler(is_return_req: int) -> Callable:
-    """Get request event handler."""
-
-    def _process_request_event(cursor, ev_id, ev_key, ev_value) -> None:
-        """Process request event."""
-        logger.info("Upsert request: %s %s %s", ev_id, ev_key, ev_value)
-
-        sql = f"""
-        INSERT INTO requests (request_id, is_return_req, {ev_key})
-        VALUES (?, ?, ?)
-        ON CONFLICT(request_id)
-        DO UPDATE SET {ev_key} = ? WHERE request_id = ?
-        """  # noqa: S608
-        params = (ev_id, is_return_req, ev_value, ev_value, ev_id)
-        _execute_sql(cursor, sql, params)
-
-    return _process_request_event
-
-
-def _process_events(path, conn, files) -> None:
-    """Process events.
-
-    Events are processed in a single SQLite transaction. Once transaction
-    completes, all events are deleted from the directory.
-    """
-    cursor = conn.cursor()
-
-    handlers = {
-        "pod": _process_pod_event,
-        "node": _process_node_event,
-        "request": _get_request_event_handler(0),
-        "return": _get_request_event_handler(1),
-    }
-
-    for filename in files:
-        logger.info("Processing event: %s/%s", path, filename)
-        ev_type, ev_id, ev_key, ev_value = filename.split("~")
-
-        if not handlers.get(ev_type):
-            logger.error("Unknown event type: %s", ev_type)
-            continue
-
-        handler: Callable = handlers.get(ev_type)
-
-        if ev_value == "None":
-            ev_value = None
-
-        handler(cursor, ev_id, ev_key, ev_value)
-
-    conn.commit()
-
-    for filename in files:
-        os.unlink(os.path.join(path, filename))  # noqa: PTH108, PTH118
-
-
+@retry(
+    retry=retry_if_exception_type(sqlite3.OperationalError),
+    wait=wait_exponential(),
+    stop=stop_after_attempt(5),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
 def process_events(watch=True) -> None:
     """Process events."""
     logger.info("Processing events: %s", context.GLOBAL.dirname)
-
-    conn = context.GLOBAL.conn
-
-    _process_events(
-        context.GLOBAL.dirname,
-        conn,
-        [
-            filename
-            for filename in os.listdir(str(context.GLOBAL.dirname))  # noqa: PTH208
-            if not filename.startswith(".")
-        ],
+    backends = (
+        ConsoleEventBackend(),
+        SqliteEventBackend(),
     )
 
-    if not watch:
-        return
+    try:
+        _process_events(backends, _pending_events(context.GLOBAL.dirname))
 
-    dirwatch = inotify.adapters.Inotify()
+        if not watch:
+            return
 
-    # Add the path to watch
-    dirwatch.add_watch(
-        str(context.GLOBAL.dirname),
-        mask=inotify.constants.IN_CREATE | inotify.constants.IN_MOVED_TO,
-    )
+        dirwatch = inotify.adapters.Inotify()
 
-    for event in dirwatch.event_gen(yield_nones=False):
-        (_, _type_names, path, _filename) = event
-        _process_events(
-            path,
-            conn,
-            [filename for filename in os.listdir(path) if not filename.startswith(".")],  # noqa: PTH208
+        # Add the path to watch
+        dirwatch.add_watch(
+            str(context.GLOBAL.dirname),
+            mask=inotify.constants.IN_CREATE | inotify.constants.IN_MOVED_TO,
         )
 
+        for event in dirwatch.event_gen(yield_nones=False):
+            (_, _type_names, path, _filename) = event
+            _process_events(backends, _pending_events(path))
+    finally:
+        for backend in backends:
+            backend.close()
 
-def post_events(events) -> None:
-    """Post events. "events" is a list of tuples, each tuple is an event."""
+
+def post_event(*args: list[dict[str, Any]], **kwargs: dict[str, Any]) -> None:
+    """Post a single event."""
+    if args:
+        assert len(args) == 1  # noqa: S101
+        post_events(args[0])
+    else:
+        post_events(kwargs)
+
+
+def post_events(*events: list[dict[str, Any]]) -> None:
+    """Post multiple events."""
+    timestamp = int(time())
+
+    buf = []
     for event in events:
-        ev_type, ev_id, ev_key, ev_value = event
-        pathlib.Path(context.GLOBAL.dirname).joinpath(
-            "~".join([ev_type, ev_id, ev_key, str(ev_value)])
-        ).touch()
+        if isinstance(event, list | tuple):
+            buf.extend(event)
+        else:
+            buf.append(event)
+
+    for event in buf:
+        assert isinstance(event, dict)  # noqa: S101
+        if "timestamp" not in event:
+            event["timestamp"] = timestamp
+
+    filename = f"{int(time() * 1000)}-{uuid4()}"
+    atomic_write(
+        [EXTRA_METADATA | event for event in buf],
+        pathlib.Path(context.GLOBAL.dirname) / filename,
+    )
+
+
+class EventsBuffer:
+    """Context manager for batched event push"""
+
+    def __init__(self) -> None:
+        """Prepare a fresh events buffer"""
+        self.events: list[dict[str, Any]] = []
+
+    def __enter__(self) -> "EventsBuffer":
+        """Enter the context manager"""
+        assert not self.events  # noqa: S101
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool | None:
+        """Exit the context manager"""
+        if exc_type is None and self.events:
+            post_events(self.events)
+            self.events = []
+        return None
+
+    def post(self, *args: list[Any], **kwargs: dict[str, Any]):
+        """Buffer event(s)."""
+        if args:
+            assert not kwargs  # noqa: S101
+            self.events.extend(args)
+        else:
+            assert kwargs  # noqa: S101
+            self.events.append(kwargs)
