@@ -17,4 +17,4 @@ pip install uv
 uv pip install -r pyproject.toml -c constraints.txt
 uv pip install -e .
 
-echo "Source the venv with: source .venv/bin/activate"
+echo "Source the venv with: source ${VENV}/bin/activate"
