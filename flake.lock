@@ -2,18 +2,18 @@
   "nodes": {
     "nixpkgs": {
       "locked": {
-        "lastModified": 1682254557,
-        "narHash": "sha256-i4dz5+5hFcCmWUPFFBsyTJwUQ8/Hr2InoXHZXkNYRy4=",
-        "owner": "nixos",
-        "repo": "nixpkgs",
-        "rev": "286e1dc6ec57d5d6ef37b15e26f69457da2f0494",
-        "type": "github"
+        "lastModified": 1742001154,
+        "narHash": "sha256-1VOZUygNreJQGljffK4kVhGzAoaV4/F5uYa7ZJKh5cg=",
+        "ref": "ms/nixos-24.11",
+        "rev": "27e4b9c5132179085fef24cd96868e4bdae58807",
+        "revCount": 710167,
+        "type": "git",
+        "url": "http://nix@stashblue.ms.com:11990/atlassian-stash/scm/nix_nixpkgs/nixpkgs.git"
       },
       "original": {
-        "owner": "nixos",
-        "ref": "release-22.11",
-        "repo": "nixpkgs",
-        "type": "github"
+        "ref": "ms/nixos-24.11",
+        "type": "git",
+        "url": "http://nix@stashblue.ms.com:11990/atlassian-stash/scm/nix_nixpkgs/nixpkgs.git"
       }
     },
     "root": {

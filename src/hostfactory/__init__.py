@@ -17,6 +17,7 @@ import functools
 import json
 import logging
 import os
+import pathlib
 import sys
 import tempfile
 import traceback
@@ -24,15 +25,13 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from typing import Callable
+from typing import Tuple
 from typing import TypeVar
 
 import click
-from typing_extensions import TypeAlias
 
 _DecoratedFuncT = TypeVar("_DecoratedFuncT", bound=Callable[..., Any])
-_ExceptionHandler: TypeAlias = (
-    "tuple[type[Exception], None | str | Callable[[Exception], str]]"
-)
+type _ExceptionHandler = Tuple[type[Exception], None | str | Callable[[Exception], str]]
 
 logger = logging.getLogger(__name__)
 EXIT_CODE_DEFAULT = 1
@@ -53,6 +52,27 @@ def atomic_symlink(src, dst):
         raise RuntimeError from exc
 
     return dst
+
+
+def atomic_write(data, dst):
+    """Atomically create a file with given content"""
+    if not isinstance(data, bytes):
+        if not isinstance(data, str):
+            data = json.dumps(data)
+        data = data.encode("utf-8")
+    dst = pathlib.Path(dst)
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=".",
+            dir=dst.parent,
+            delete=False,
+        ) as tf:
+            tf.write(data)
+            tf.flush()
+            os.rename(tf.name, dst)  # noqa: PTH104
+    except OSError as exc:
+        logger.exception("Exception occurred: %s", exc)
+        raise RuntimeError from exc
 
 
 class DateTimeEncoder(json.JSONEncoder):
