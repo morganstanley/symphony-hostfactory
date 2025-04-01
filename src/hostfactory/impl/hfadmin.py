@@ -6,6 +6,8 @@ from time import sleep
 
 import kubernetes
 
+from hostfactory import k8sutils
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,11 +19,8 @@ def get_pods_in_current_namespace() -> kubernetes.client.models.V1PodList:
     # Get the current namespace
     namespace = kubernetes.config.list_kube_config_contexts()[1]["context"]["namespace"]
 
-    # Create an instance of the CoreV1Api
-    core_v1_api = kubernetes.client.CoreV1Api()
-
     # List the pods in the current namespace
-    return core_v1_api.list_namespaced_pod(namespace=namespace)
+    return k8sutils.get_kubernetes_client().list_namespaced_pod(namespace=namespace)
 
 
 def drain_node_in_namespace(node_count=1, sleep_duration: int = 5) -> int:
@@ -34,11 +33,10 @@ def drain_node_in_namespace(node_count=1, sleep_duration: int = 5) -> int:
     # Get the current namespace
     namespace = kubernetes.config.list_kube_config_contexts()[1]["context"]["namespace"]
 
-    # Create an instance of the CoreV1Api
-    core_v1_api = kubernetes.client.CoreV1Api()
-
     # List the pods in the current namespace
-    pods = core_v1_api.list_namespaced_pod(namespace=namespace).items
+    pods = (
+        k8sutils.get_kubernetes_client().list_namespaced_pod(namespace=namespace).items
+    )
     if len(pods) == 0:
         logger.info("There are no active pods, nothing to do")
         return 0
@@ -54,7 +52,7 @@ def drain_node_in_namespace(node_count=1, sleep_duration: int = 5) -> int:
     for pod in pods:
         if pod.spec.node_name in random_nodes:
             logger.info("Deleting pod %s", pod.metadata.name)
-            core_v1_api.delete_namespaced_pod(
+            k8sutils.get_kubernetes_client().delete_namespaced_pod(
                 name=pod.metadata.name, namespace=namespace
             )
             count += 1
@@ -72,11 +70,10 @@ def delete_pods_in_namespace(pod_count: int = 0, sleep_duration: int = 5) -> Non
     # Get the current namespace
     namespace = kubernetes.config.list_kube_config_contexts()[1]["context"]["namespace"]
 
-    # Create an instance of the CoreV1Api
-    core_v1_api = kubernetes.client.CoreV1Api()
-
     # List the pods in the current namespace
-    pods = core_v1_api.list_namespaced_pod(namespace=namespace).items
+    pods = (
+        k8sutils.get_kubernetes_client().list_namespaced_pod(namespace=namespace).items
+    )
     logger.info("Pods types is %s", type(pods))
 
     random_pods = pods if pod_count == 0 else random.sample(pods, pod_count)
@@ -85,7 +82,9 @@ def delete_pods_in_namespace(pod_count: int = 0, sleep_duration: int = 5) -> Non
 
     # Delete each pod
     for pod in random_pods:
-        core_v1_api.delete_namespaced_pod(name=pod.metadata.name, namespace=namespace)
+        k8sutils.get_kubernetes_client().delete_namespaced_pod(
+            name=pod.metadata.name, namespace=namespace
+        )
     while len(get_pods_in_current_namespace().items) > target_count:
         # TODO sleep should be configurable
         sleep(sleep_duration)

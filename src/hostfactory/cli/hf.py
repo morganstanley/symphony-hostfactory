@@ -26,6 +26,7 @@ import hostfactory
 from hostfactory import api as hfapi
 from hostfactory import cli
 from hostfactory import events as hfevents
+from hostfactory import hfcleaner
 from hostfactory import k8sutils
 from hostfactory import watcher as hfwatcher
 from hostfactory.cli import context
@@ -89,6 +90,7 @@ def run(proxy, log_level, log_file, workdir, confdir) -> None:
         log_file (str): The log file location.
         workdir (str): The working directory.
         confdir (str): The configuration directory.
+        machine_timeout (int): The machine timeout in minutes.
     """
     context.GLOBAL.workdir = workdir
     context.GLOBAL.proxy = proxy
@@ -101,7 +103,19 @@ def run(proxy, log_level, log_file, workdir, confdir) -> None:
     log_handler.setup_logging(log_level, log_file)
 
     logger.info("Workdir: %s", workdir)
-    for dirname in ["requests", "return-requests", "pods", "nodes", "events"]:
+    for dirname in [
+        "requests",
+        "return-requests",
+        "pods",
+        "nodes",
+        "events",
+        "kube-events",
+        "kube-events/Node",
+        "deleted-pods",
+        "nodes",
+        "deleted-nodes",
+        "events",
+    ]:
         pathlib.Path(context.GLOBAL.workdir, dirname).mkdir(parents=True, exist_ok=True)
 
 
@@ -212,6 +226,34 @@ def get_return_requests(json_file) -> None:
     cli.output(json.dumps(response, indent=4))
 
 
+@run.command()
+@click.option(
+    "--timeout",
+    help="Pod timeout in seconds.",
+    type=int,
+    default=300,
+    show_default=True,
+)
+@click.option(
+    "--run-once",
+    help="Run the cleaner only once.",
+    is_flag=True,
+)
+@click.option(
+    "--dry-run",
+    help="Dry run the cleaner.",
+    is_flag=True,
+)
+@ON_EXCEPTIONS
+def run_cleaner(timeout, run_once, dry_run) -> None:
+    """Run the hostfactory cleaner."""
+    workdir = context.GLOBAL.workdir
+    k8sutils.load_k8s_config(context.GLOBAL.proxy)
+    logger.info("Running cleaner at %s", workdir)
+    k8s_client = k8sutils.get_kubernetes_client()
+    hfcleaner.run(k8s_client, workdir, timeout, run_once, dry_run)
+
+
 @run.group()
 def watch() -> None:
     """Watch hostfactory events."""
@@ -234,7 +276,8 @@ def watch_request_machines() -> None:
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf request-machines at %s", workdir)
-    hfwatcher.watch_requests(workdir)
+    k8s_client = k8sutils.get_kubernetes_client()
+    hfwatcher.watch_requests(workdir, k8s_client)
 
 
 @watch.command(name="request-return-machines")
@@ -244,7 +287,8 @@ def watch_request_return_machines() -> None:
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf request-return-machines at %s", workdir)
-    hfwatcher.watch_return_requests(workdir)
+    k8s_client = k8sutils.get_kubernetes_client()
+    hfwatcher.watch_return_requests(workdir, k8s_client)
 
 
 @watch.command(name="events")
@@ -261,7 +305,6 @@ def events(dbfile) -> None:
 
     context.GLOBAL.dirname = str(dirname)
     context.GLOBAL.dbfile = dbfile
-    hfevents.init_events_db()
 
     logger.info("Watching for hf events at %s", dirname)
     hfevents.process_events()
@@ -275,3 +318,13 @@ def nodes() -> None:
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf k8s nodes at %s", workdir)
     hfwatcher.watch_nodes(workdir)
+
+
+@watch.command()
+@ON_EXCEPTIONS
+def kube_events() -> None:
+    """Watch for kubernetes events."""
+    workdir = context.GLOBAL.workdir
+    k8sutils.load_k8s_config(context.GLOBAL.proxy)
+    logger.info("Watching for kubernetes events at %s", workdir)
+    hfwatcher.watch_kube_events(workdir)
