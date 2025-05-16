@@ -23,8 +23,7 @@ from hostfactory import cli
 from hostfactory import events
 from hostfactory.cli import context
 from hostfactory.cli import log_handler
-from hostfactory.impl.hfadmin import delete_pods_in_namespace
-from hostfactory.impl.hfadmin import drain_node_in_namespace
+from hostfactory.impl import hfadmin as impl
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +209,7 @@ def get_return_requests(ctx) -> None:
 @click.option("--sleep", default=5, help="The time to wait between checks", type=int)
 def delete_pods(count, sleep) -> None:
     """Delete all the pods on a node."""
-    delete_pods_in_namespace(pod_count=count, sleep_duration=sleep)
+    impl.delete_pods_in_namespace(pod_count=count, sleep_duration=sleep)
     cli.output(f"Deleted {count} pods")
 
 
@@ -219,5 +218,5 @@ def delete_pods(count, sleep) -> None:
 @click.option("--sleep", default=5, help="The time to wait between checks", type=int)
 def drain_nodes(count, sleep) -> None:
     """Drain nodes."""
-    deleted_count = drain_node_in_namespace(node_count=count, sleep_duration=sleep)
+    deleted_count = impl.drain_node_in_namespace(node_count=count, sleep_duration=sleep)
     cli.output(f"Deleted {deleted_count} pods from nodes")

@@ -16,7 +16,8 @@ Common utilities.
 import functools
 import json
 import logging
-import os
+import random
+import string
 import sys
 import tempfile
 import traceback
@@ -24,35 +25,27 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from typing import Callable
+from typing import Tuple
 from typing import TypeVar
 
 import click
-from typing_extensions import TypeAlias
 
 _DecoratedFuncT = TypeVar("_DecoratedFuncT", bound=Callable[..., Any])
-_ExceptionHandler: TypeAlias = (
-    "tuple[type[Exception], None | str | Callable[[Exception], str]]"
-)
+type _ExceptionHandler = Tuple[type[Exception], None | str | Callable[[Exception], str]]
 
 logger = logging.getLogger(__name__)
 EXIT_CODE_DEFAULT = 1
 
 
-def atomic_symlink(src, dst):
-    """Atomically create a symlink from `src` to `dst`."""
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix=".",
-            dir=os.path.dirname(dst),  # noqa: PTH120
-        ) as tf:
-            temp_path = tf.name
-        os.symlink(src, temp_path)
-        os.rename(temp_path, dst)  # noqa: PTH104
-    except OSError as exc:
-        logger.exception("Exception occurred: %s", exc)
-        raise RuntimeError from exc
-
-    return dst
+def generate_short_uuid() -> str:
+    """Generates a short UUID for hfreqid.
+    Returns:
+        str: A short UUID string of length 12.
+    """
+    alphabet = string.ascii_lowercase + string.digits
+    return random.choice(string.ascii_lowercase) + "".join(
+        random.choices(alphabet, k=11)
+    )
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -64,6 +57,11 @@ class DateTimeEncoder(json.JSONEncoder):
         """Convert the given date object to a JSON-serializable format."""
         if isinstance(o, datetime):
             return int(o.timestamp())
+
+        try:
+            return o.to_dict()
+        except AttributeError:
+            pass
 
         return super().default(o)
 

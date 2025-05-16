@@ -14,12 +14,10 @@ Test Hostfactory implementation.
 """
 
 import json
-import pathlib
 import re
 import shutil
 import tempfile
 import unittest
-from unittest import mock
 
 import click.testing
 
@@ -50,7 +48,7 @@ def _run_cli(module, args) -> click.testing.Result:
     )
 
 
-class TestGetAavailableTemplates(unittest.TestCase):
+class TestGetAvailableTemplates(unittest.TestCase):
     """Validate Hostfactory api functions"""
 
     def setUp(self) -> None:
@@ -123,7 +121,7 @@ class TestRequestMachines(unittest.TestCase):
             ],
         )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
 
         # Assert that json output does not raise any errors
         json_output = json.loads(result.output)
@@ -131,15 +129,8 @@ class TestRequestMachines(unittest.TestCase):
         assert "message" in json_output
         assert "requestId" in json_output
         assert re.search(UUID_PATTERN, json_output.get("requestId"))
-        reqid = json_output.get("requestId")
-        # Check that events are generated.
-        assert pathlib.Path(
-            f"{self.workdir}/events/pod~{reqid}-0~request~{reqid}"
-        ).exists()
 
 
-@mock.patch("hostfactory.k8sutils.load_k8s_config", return_value=None)
-@mock.patch("hostfactory.k8sutils.get_namespace", return_value="test-namespace")
 class TestRequestReturnMachines(unittest.TestCase):
     """Validate Hostfactory api functions"""
 
@@ -163,7 +154,7 @@ class TestRequestReturnMachines(unittest.TestCase):
         """Clean up the test environment."""
         shutil.rmtree(self.workdir, ignore_errors=True)
 
-    def test_request_return_machines(self, _1, _2) -> None:
+    def test_request_return_machines(self) -> None:
         """Test case for the `request_machines` function.
         This test case verifies the behavior of the `request_machines` function
         by invoking it with a sample input and checking the output.
@@ -178,7 +169,7 @@ class TestRequestReturnMachines(unittest.TestCase):
             ],
         )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
 
         json_output = json.loads(result.output)
         assert json_output is not None

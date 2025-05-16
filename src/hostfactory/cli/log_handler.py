@@ -17,15 +17,15 @@ import datetime
 import logging
 import sys
 
-import wrapt
-from rich.console import Console
-from rich.text import Text
+from hostfactory.cli import context
 
 SUPPORT_UNICODE = True
 MAX_PANEL_WIDTH = 100
 LOG_FORMAT = (
-    "%(asctime)s %(levelname)s - %(module)s.%(funcName)s:%(lineno)d - %(message)s"
+    "%(asctime)s [TraceID: %(trace_id)s] %(levelname)s - "
+    "%(module)s.%(funcName)s:%(lineno)d - %(message)s"
 )
+ISO_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f"
 LOG_LEVELS = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -34,93 +34,53 @@ LOG_LEVELS = {
     "CRITICAL": logging.CRITICAL,
 }
 
-# This is where we hold the stderr Console object
-# once it is initialised by setup_logging()
-CONSOLE = wrapt.ObjectProxy(None)
+
+def _get_iso_timestamp(record: logging.LogRecord) -> str:
+    """Convert the timestamp in ISO 8601 format."""
+    dt = datetime.datetime.fromtimestamp(record.created, tz=datetime.UTC).astimezone()
+    return dt.strftime(ISO_TIME_FORMAT)[:-3] + f" {dt.tzname()}"
 
 
-class MarkupHandler(logging.Handler):
-    """A log handler that is a tad bit prettier than stock,
-    and optionally applies markup to the message body itself.
-    NB: rich provides a built-in log handler, but that behaves a little OTT
-        and, somewhat ironically, breaks live renderables.
-    """
+class TraceIDFilter(logging.Filter):
+    """Custom logging filter to add a trace ID from the environment."""
 
-    def __init__(
-        self,
-        markup_in_message,
-        show_timestamp=None,
-        show_level=True,
-        show_logger=False,
-    ) -> None:
-        """Initialize the log handler."""
-        super().__init__()
-        self.markup_in_message = markup_in_message
-        self.show_timestamp = show_timestamp
-        self.show_level = show_level
-        self.show_logger = show_logger
+    def filter(self, record):
+        """Add trace ID to the log record."""
+        record.trace_id = context.GLOBAL.request_id
+        return True
 
-    def emit(self, record):
-        """Emit the log record."""
-        renderables = []
-        if self.show_timestamp:
-            timestamp = datetime.datetime.fromtimestamp(record.created)
-            renderables.append(
-                Text.styled(timestamp.isoformat(sep=" ")[:23], style="log.time")
-            )
 
-        if self.show_logger:
-            renderables.append(Text(record.name, style="bright_black"))
+class ISO8601Formatter(logging.Formatter):
+    """Custom formatter to include timezone name in ISO 8601 format."""
 
-        if self.show_level:
-            level = record.levelname
-            renderables.append(
-                Text.styled(level, style=f"logging.level.{level.lower()}")
-            )
-
-        # Debug (and lower) logging does not need to be prettified,
-        # and in fact routinely contains markdown-breaking stuff like
-        # JSON objects and arrays, so let's not bother.
-        render_markup = self.markup_in_message and record.levelno > logging.DEBUG
-
-        message = self.format(record)
-        renderables.append(
-            Text.from_markup(message, emoji=False) if render_markup else Text(message)
-        )
-
-        CONSOLE.print(*renderables, soft_wrap=True)
+    def formatTime(self, record, datefmt=None):  # noqa: N802, ARG002
+        """Format the time with timezone name in ISO 8601 format."""
+        return _get_iso_timestamp(record)
 
 
 def setup_logging(log_level: str, log_file: str | None = None) -> None:
     """Setup logging handlers. Invoke once."""
-    # ruff: noqa: PLW0603
-    # We can live with the global constant mutation, because upstream
-    # components need to know whether the console supports unicode or not.
+    # Define the formatter
+    formatter = ISO8601Formatter(LOG_FORMAT)
 
-    global SUPPORT_UNICODE
-    debug = log_level == "debug"
+    # Console handler (stdout)
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(log_level.upper())
+    console_handler.setFormatter(formatter)
+    console_handler.addFilter(TraceIDFilter())
 
-    SUPPORT_UNICODE = sys.stderr.encoding.lower().startswith("utf")
-
-    CONSOLE.__wrapped__ = Console(stderr=True, emoji=SUPPORT_UNICODE)
-
-    plain_handler = MarkupHandler(markup_in_message=False, show_logger=debug)
-    plain_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    logging.basicConfig(
+        format="%(message)s",
+        level=LOG_LEVELS[log_level.upper()],
+        handlers=[console_handler],
+    )
 
     file_handler = None
     if log_file:
         file_handler = logging.FileHandler(filename=log_file)
-        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        file_handler.setFormatter(formatter)
+        file_handler.addFilter(TraceIDFilter())
 
-    # Root logger is conservative. No markup support because
-    # we can't expect libraries not to try to emit broken markdown.
-    logging.basicConfig(
-        format="%(message)s",
-        level=LOG_LEVELS[log_level.upper()],
-        handlers=[plain_handler],
-    )
-
-    # For the loggers we *do* control, support full markup.
     logger = logging.getLogger("hostfactory")
     if file_handler:
         logger.addHandler(file_handler)

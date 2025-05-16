@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="20" time="5.128" timestamp="2025-05-05T16:19:30.389069+01:00" hostname="ivapp1484033.heathrow.ms.com"><testcase classname="src.hostfactory.tests.unit.test_api" name="test_mktempdir" time="0.007" /><testcase classname="src.hostfactory.tests.unit.test_api" name="test_generate_short_uuid" time="0.001" /><testcase classname="src.hostfactory.tests.unit.test_api" name="test_get_machines_dir" time="0.001"><failure message="FileNotFoundError: Request directory for req1 not found: /var/tmp/75b5b937-0c75-4a24-8814-0bfe7b3d9dd1/return-requests/req1/req1 in workdir: /var/tmp/75b5b937-0c75-4a24-8814-0bfe7b3d9dd1">def test_get_machines_dir() -&gt; None:
+        """Test get machines dir."""
+        workdir = pathlib.Path(get_workdir())
+        request_id = "req1"
+    
+        req1_dir = workdir / "requests" / request_id
+        req1_dir.mkdir(parents=True, exist_ok=True)
+    
+&gt;       machines_dir = api._get_machines_dir(workdir, request_id)
+
+src/hostfactory/tests/unit/test_api.py:84: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+workdir = PosixPath('/var/tmp/75b5b937-0c75-4a24-8814-0bfe7b3d9dd1'), request_id = 'req1'
+
+    def _get_machines_dir(
+        workdir: pathlib.Path, request_id: str
+    ) -&gt; pathlib.Path:
+        """Get the machines directory based on the request id."""
+    
+        hf_reqs_dir = _get_request_dir(workdir, request_id)
+    
+        machines_dir = hf_reqs_dir / request_id
+    
+        if not machines_dir.exists():
+&gt;           raise FileNotFoundError(f"Request directory for {request_id} "
+                                    f"not found: {machines_dir} "
+                                    f"in workdir: {workdir}")
+E           FileNotFoundError: Request directory for req1 not found: /var/tmp/75b5b937-0c75-4a24-8814-0bfe7b3d9dd1/return-requests/req1/req1 in workdir: /var/tmp/75b5b937-0c75-4a24-8814-0bfe7b3d9dd1
+
+src/hostfactory/api.py:79: FileNotFoundError</failure></testcase><testcase classname="src.hostfactory.tests.unit.test_api" name="test_resolve_machine_status" time="0.001" /><testcase classname="src.hostfactory.tests.unit.test_api" name="test_load_pod_file" time="0.003"><failure message="AssertionError: Expected 'fetch_pod_status' to be called once. Called 0 times.">mock_open = &lt;MagicMock name='fetch_pod_status' id='140093227628064'&gt;
+
+    @mock.patch("hostfactory.fetch_pod_status", return_value="running")
+    def test_load_pod_file(mock_open) -&gt; None:
+        """Test load pod file."""
+        workdir = pathlib.Path(get_workdir())
+        mock_path = mock.Mock(spec=pathlib.Path)
+        mock_path.return_value = workdir / "pod1"
+        mock_path.exists.return_value = True
+        mock_path.is_symlink.return_value = False
+    
+        pod_data = api._load_pod_file(workdir, "pod1")
+    
+&gt;       mock_open.assert_called_once_with("r", encoding="utf-8")
+
+src/hostfactory/tests/unit/test_api.py:137: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;MagicMock name='fetch_pod_status' id='140093227628064'&gt;, args = ('r',), kwargs = {'encoding': 'utf-8'}
+msg = "Expected 'fetch_pod_status' to be called once. Called 0 times."
+
+    def assert_called_once_with(self, /, *args, **kwargs):
+        """assert that the mock was called exactly once and that that call was
+        with the specified arguments."""
+        if not self.call_count == 1:
+            msg = ("Expected '%s' to be called once. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected 'fetch_pod_status' to be called once. Called 0 times.
+
+/ms/dist/python/PROJ/core/3.12.3-0/exec/lib/python3.12/unittest/mock.py:955: AssertionError</failure></testcase><testcase classname="src.hostfactory.tests.unit.test_api" name="test_write_pod_spec" time="0.025" /><testcase classname="src.hostfactory.tests.unit.test_api" name="test_request_machines" time="0.006" /><testcase classname="src.hostfactory.tests.unit.test_api" name="test_request_return_machines" time="0.004"><failure message="TypeError: unsupported operand type(s) for /: 'str' and 'str'">_mock_pathlib_exists = &lt;MagicMock name='exists' id='140093223488160'&gt;, mock_rename = &lt;MagicMock name='rename' id='140093221707584'&gt;
+mock_generate_short_uuid = &lt;MagicMock name='_generate_short_uuid' id='140093221712384'&gt;, mock_mkdtemp = &lt;MagicMock name='mkdtemp' id='140093221732768'&gt;
+_mock_event_buffer = &lt;MagicMock name='EventsBuffer' id='140093221737232'&gt;, _mock_post_event = &lt;MagicMock name='post_event' id='140093221741216'&gt;
+_mock_post_events = &lt;MagicMock name='post_events' id='140093221745344'&gt;
+
+    @mock.patch("hostfactory.events.post_events", return_value=None)
+    @mock.patch("hostfactory.events.post_event", return_value=None)
+    @mock.patch("hostfactory.events.EventsBuffer")
+    @mock.patch("hostfactory.api.tempfile.mkdtemp", return_value="/path/to/workdir/tempdir")
+    @mock.patch("hostfactory.api._generate_short_uuid", return_value="mock_request_id")
+    @mock.patch("pathlib.Path.rename")
+    @mock.patch("pathlib.Path.exists", return_value=True)
+    def test_request_return_machines(
+        _mock_pathlib_exists,
+        mock_rename,
+        mock_generate_short_uuid,
+        mock_mkdtemp,
+        _mock_event_buffer,
+        _mock_post_event,
+        _mock_post_events,
+    ) -&gt; None:
+        """Test request return machines."""
+        workdir = "/path/to/workdir"
+        machines = [
+            {"machineId": "uuid-0", "name": "machine-0"},
+            {"machineId": "uuid-1", "name": "machine-1"},
+            {"machineId": "uuid-2", "name": "machine-2"},
+        ]
+    
+&gt;       response = api.request_return_machines(workdir, machines)
+
+src/hostfactory/tests/unit/test_api.py:242: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/hostfactory/api.py:372: in request_return_machines
+    dst_path = _get_request_dir(workdir,request_id)
+src/hostfactory/api.py:92: in _get_request_dir
+    if not _is_return_request(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+workdir = '/path/to/workdir', request_id = 'mock_request_id'
+
+    def _is_return_request(
+        workdir: pathlib.Path, request_id: str
+    ) -&gt; bool:
+        """Check if the request is a return request."""
+&gt;       machines_dir = workdir / "requests" / request_id
+E       TypeError: unsupported operand type(s) for /: 'str' and 'str'
+
+src/hostfactory/api.py:66: TypeError</failure></testcase><testcase classname="src.hostfactory.tests.unit.test_api" name="test_get_request_status" time="0.003"><failure message="TypeError: unsupported operand type(s) for /: 'str' and 'str'">_mock_is_symlink = &lt;MagicMock name='is_symlink' id='140093219991584'&gt;, _mock_readlink = &lt;MagicMock name='readlink' id='140093235262528'&gt;
+_mock_exists = &lt;MagicMock name='exists' id='140093219898384'&gt;, _mock_iterdir = &lt;MagicMock name='iterdir' id='140093219902464'&gt;
+mock_load_pod_file = &lt;MagicMock name='_load_pod_file' id='140093219906400'&gt;
+mock_resolve_machine_status = &lt;MagicMock name='_resolve_machine_status' id='140093219910336'&gt;
+mock_get_machines_dir = &lt;MagicMock name='_get_machines_dir' id='140093219422720'&gt;, _mock_event_buffer = &lt;MagicMock name='EventsBuffer' id='140093219426464'&gt;
+_mock_post_event = &lt;MagicMock name='post_event' id='140093226903136'&gt;, _mock_post_events = &lt;MagicMock name='post_events' id='140093219434000'&gt;
+mock_fetch_pod_status = &lt;MagicMock name='fetch_pod_status' id='140093219437840'&gt;
+
+    @mock.patch("hostfactory.fetch_pod_status", return_value="running")
+    @mock.patch("hostfactory.events.post_events", return_value=None)
+    @mock.patch("hostfactory.events.post_event", return_value=None)
+    @mock.patch("hostfactory.events.EventsBuffer")
+    @mock.patch(
+        "hostfactory.api._get_machines_dir",
+        return_value=(pathlib.Path("/path/to/workdir"), False),
+    )
+    @mock.patch(
+        "hostfactory.api._resolve_machine_status", return_value=("running", "succeed")
+    )
+    @mock.patch("hostfactory.api._load_pod_file", return_value=mock_pod)
+    @mock.patch("hostfactory.api.pathlib.Path.iterdir", return_value=[pathlib.Path("pod1")])
+    @mock.patch("hostfactory.api.pathlib.Path.exists", return_value=True)
+    @mock.patch("hostfactory.api.pathlib.Path.readlink", return_value=pathlib.Path("pod1"))
+    @mock.patch("hostfactory.api.pathlib.Path.is_symlink", return_value=False)
+    def test_get_request_status(
+        _mock_is_symlink,
+        _mock_readlink,
+        _mock_exists,
+        _mock_iterdir,
+        mock_load_pod_file,
+        mock_resolve_machine_status,
+        mock_get_machines_dir,
+        _mock_event_buffer,
+        _mock_post_event,
+        _mock_post_events,
+        mock_fetch_pod_status,
+    ) -&gt; None:
+        """Test get request status."""
+        workdir = "/path/to/workdir"
+        hf_req_ids = ["req1"]
+        # TODO: (zaidn) Add more cases to test different statuses.
+        expected_response = {
+            "requests": [
+                {
+                    "requestId": "req1",
+                    "message": "",
+                    "status": "complete",
+                    "machines": [
+                        {
+                            "machineId": "uid1",
+                            "name": "pod1",
+                            "result": "succeed",
+                            "status": "running",
+                            "privateIpAddress": "192.168.1.1",
+                            "publicIpAddress": "",
+                            "launchtime": "1739212317",
+                            "message": "Allocated by K8s hostfactory",
+                        }
+                    ],
+                }
+            ]
+        }
+    
+&gt;       response = api.get_request_status(workdir, hf_req_ids)
+
+src/hostfactory/tests/unit/test_api.py:309: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/hostfactory/api.py:275: in get_request_status
+    ret_request= _is_return_request(workdir, request_id)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+workdir = '/path/to/workdir', request_id = 'req1'
+
+    def _is_return_request(
+        workdir: pathlib.Path, request_id: str
+    ) -&gt; bool:
+        """Check if the request is a return request."""
+&gt;       machines_dir = workdir / "requests" / request_id
+E       TypeError: unsupported operand type(s) for /: 'str' and 'str'
+
+src/hostfactory/api.py:66: TypeError</failure></testcase><testcase classname="src.hostfactory.tests.unit.test_api" name="test_get_return_requests" time="0.002" /><testcase classname="src.hostfactory.tests.unit.test_events" name="test_post_event" time="0.002" /><testcase classname="src.hostfactory.tests.unit.test_events" name="test_sqlite_events_backend" time="0.002" /><testcase classname="src.hostfactory.tests.unit.test_hfcleaner.TestHFCleaner" name="test_cleaner_no_timeout" time="0.010" /><testcase classname="src.hostfactory.tests.unit.test_hfcleaner.TestHFCleaner" name="test_cleaner_timeout" time="0.007" /><testcase classname="src.hostfactory.tests.unit.test_hostfactory.TestGetAvailableTemplates" name="test_get_available_templates" time="0.006" /><testcase classname="src.hostfactory.tests.unit.test_hostfactory.TestRequestMachines" name="test_request_machines" time="0.015" /><testcase classname="src.hostfactory.tests.unit.test_hostfactory.TestRequestReturnMachines" name="test_request_return_machines" time="0.008"><failure message="assert 1 == 0&#10; +  where 1 = &lt;Result SystemExit(1)&gt;.exit_code">self = &lt;hostfactory.tests.unit.test_hostfactory.TestRequestReturnMachines testMethod=test_request_return_machines&gt;
+
+    def test_request_return_machines(self) -&gt; None:
+        """Test case for the `request_machines` function.
+        This test case verifies the behavior of the `request_machines` function
+        by invoking it with a sample input and checking the output.
+        """
+        result = _run_cli(
+            hostfactory,
+            [
+                "--workdir",
+                self.workdir,
+                "request-return-machines",
+                self.json_in,
+            ],
+        )
+    
+&gt;       assert result.exit_code == 0
+E       assert 1 == 0
+E        +  where 1 = &lt;Result SystemExit(1)&gt;.exit_code
+
+src/hostfactory/tests/unit/test_hostfactory.py:172: AssertionError</failure></testcase><testcase classname="src.hostfactory.tests.unit.test_utils" name="test_atomic_symlink" time="0.002" /><testcase classname="src.hostfactory.tests.unit.test_watcher.TestRequestMachinesWatcher" name="test_request_machines_watcher" time="0.011" /><testcase classname="src.hostfactory.tests.unit.test_watcher.TestRequestReturnMachinesWatcher" name="test_request_return_machines_watcher" time="0.008" /></testsuite></testsuites>

@@ -17,7 +17,6 @@ import importlib
 import json
 import os
 import pathlib
-import pwd
 import shutil
 import tempfile
 from functools import cache
@@ -75,10 +74,15 @@ def cleanup_provider_conf() -> None:
 
 def get_workdir() -> str:
     """creates a tempdir for testing if HF_K8S_WORKDIR is not set"""
-    temp_dir = os.getenv("HF_K8S_WORKDIR")
-    if temp_dir:
-        return temp_dir
-    username = pwd.getpwuid(os.getuid()).pw_name
-    test_dir = pathlib.Path(f"/tmp/hostfactory-test-{username}/")  # noqa: S108
-    test_dir.mkdir(parents=True, exist_ok=True)
-    return str(test_dir)
+    workdir = os.getenv("HF_K8S_WORKDIR")
+    if not workdir:
+        user = os.getenv("USER")
+        if user:
+            workdir = pathlib.Path(f"/tmp/hostfactory-test-{user}/")  # noqa: S108
+        else:
+            workdir = pathlib.Path("/tmp/hostfactory-test/")  # noqa: S108
+    else:
+        workdir = pathlib.Path(workdir)
+
+    workdir.mkdir(parents=True, exist_ok=True)
+    return str(workdir)

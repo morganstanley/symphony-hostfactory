@@ -26,6 +26,10 @@ class Context:
         self.dirname = None
         self.confdir = None
         self.templates_path = None
+        self.machine_timeout = None
+        self.cleanup_interval = 30
+        self.node_refresh_interval = 300
+        self.request_id = None
 
     @property
     def default_workdir(self) -> str:
@@ -36,6 +40,11 @@ class Context:
     def default_templates_filename(self) -> str:
         """Get the default templates filename."""
         return "k8sprov_templates.json"
+
+    @property
+    def default_machine_timeout(self) -> int:
+        """Get the default machine timeout."""
+        return 5
 
 
 GLOBAL = Context()

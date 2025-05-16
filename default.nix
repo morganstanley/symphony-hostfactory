@@ -1,19 +1,19 @@
 {
   callPackages,
-  python311,
+  python312,
   nix-gitignore,
 }:
 let
   shells = callPackages ./shells.nix { };
 
-  py = python311;
+  py = python312;
 
   hostfactory = py.pkgs.buildPythonPackage rec {
     pname = "hostfactory";
     version = "1.0";
     pyproject = true;
 
-    # TODO: move source up one level, otheriwise app is rebuilt every time
+    # TODO: move source up one level, otherwise app is rebuilt every time
     #       there is a change in root level expressions.
     src =
       nix-gitignore.gitignoreSource
@@ -52,6 +52,7 @@ let
       wrapt
       rich
       pydantic
+      tenacity
     ];
   };
 in

@@ -23,8 +23,10 @@ from unittest import mock
 import inotify.adapters
 import inotify.constants
 
-import hostfactory.watcher
-from hostfactory.tests import get_pod_spec
+from hostfactory import fsutils
+from hostfactory.impl.watchers import request
+from hostfactory.impl.watchers import request_machine
+from hostfactory.impl.watchers import return_machine
 from hostfactory.tests import get_workdir
 
 
@@ -44,9 +46,10 @@ def _read_all_events(inotify_inst) -> list:
 
 
 @mock.patch(
-    "hostfactory.watcher.inotify.adapters.Inotify", return_value=mock.MagicMock()
+    "hostfactory.impl.watchers.request.inotify.adapters.Inotify",
+    return_value=mock.MagicMock(),
 )
-@mock.patch("hostfactory.watcher._create_pod")
+@mock.patch("hostfactory.impl.watchers.request_machine._create_pod")
 class TestRequestMachinesWatcher(unittest.TestCase):
     """Validate Hostfactory request machines watcher"""
 
@@ -64,41 +67,42 @@ class TestRequestMachinesWatcher(unittest.TestCase):
         del self.inotify_inst
         shutil.rmtree(self.workdir, ignore_errors=True)
 
-    def test_request_machines_watcher(self, mock_create_pod, mock_inotify) -> None:
+    def test_request_machines_watcher(
+        self,
+        mock_create_pod,
+        mock_inotify,  # noqa: ARG002
+    ) -> None:
         """Test request machines watcher"""
         temp_dir = pathlib.Path(tempfile.mkdtemp(dir="/tmp"))
 
         for i in range(1, 4):
             file_name = f"machine{i}"
             temp_file_path = temp_dir / file_name
-            hostfactory.atomic_symlink("pending", temp_file_path)
-        pod_spec = temp_dir / ".podspec"
-        pod_spec_path = get_pod_spec()
-        pod_spec.write_text(pod_spec_path)
+            fsutils.atomic_symlink("pending", temp_file_path)
 
         temp_dir.rename(self.req_dir)
 
-        mock_inotify.event_gen.return_value = _read_all_events(self.inotify_inst)
-
-        hostfactory.watcher.watch_requests(self.workdir)
+        mock_k8s_client = mock.MagicMock()
+        request._process_pending_events(
+            request_dir=self.workdir / "requests",
+            k8s_client=mock_k8s_client,
+            workdir=self.workdir,
+            request_handler=request_machine.handle_machine,
+        )
 
         assert mock_create_pod.call_count == 3
         calls = [
-            mock.call(
-                self.req_dir / f"machine{i}",
-                self.req_dir.parent,
-                pathlib.Path(pod_spec_path),
-            )
+            mock.call(mock_k8s_client, self.req_dir / f"machine{i}")
             for i in range(1, 4)
         ]
         mock_create_pod.assert_has_calls(calls, any_order=True)
-        assert pathlib.Path(self.req_dir / ".processed").exists()
 
 
 @mock.patch(
-    "hostfactory.watcher.inotify.adapters.Inotify", return_value=mock.MagicMock()
+    "hostfactory.impl.watchers.request.inotify.adapters.Inotify",
+    return_value=mock.MagicMock(),
 )
-@mock.patch("hostfactory.watcher._delete_pod")
+@mock.patch("hostfactory.impl.watchers.return_machine._delete_pod")
 class TestRequestReturnMachinesWatcher(unittest.TestCase):
     """Validate Hostfactory request return machines watcher"""
 
@@ -109,6 +113,10 @@ class TestRequestReturnMachinesWatcher(unittest.TestCase):
         requests = self.workdir / "return-requests"
         self.req_dir = requests / req_id
         self.req_dir.mkdir(parents=True, exist_ok=True)
+        self.pods_dir = self.workdir / "pods"
+        self.pods_dir.mkdir(parents=True, exist_ok=True)
+        self.pods_status_dir = self.workdir / "pods-status"
+        self.pods_status_dir.mkdir(parents=True, exist_ok=True)
         self.inotify_inst = _setup_inotify(requests)
 
     def tearDown(self) -> None:
@@ -117,24 +125,32 @@ class TestRequestReturnMachinesWatcher(unittest.TestCase):
         shutil.rmtree(self.workdir, ignore_errors=True)
 
     def test_request_return_machines_watcher(
-        self, mock_delete_pod, mock_inotify
+        self,
+        mock_delete_pod,
+        mock_inotify,  # noqa: ARG002
     ) -> None:
         """Test request return machines watcher"""
         mock_pod = {"metadata": {"name": "machine1"}, "status": {"phase": "Running"}}
         temp_dir = pathlib.Path(tempfile.mkdtemp(dir="/tmp"))
         for i in range(1, 4):
             file_name = f"machine{i}"
-            temp_file_path = temp_dir / file_name
+            (temp_dir / file_name).touch()
+            (self.pods_status_dir / file_name).symlink_to("running")
             mock_pod["metadata"]["name"] = file_name
-            json.dump(mock_pod, temp_file_path.open("w"))
+            (self.pods_dir / file_name).write_text(json.dumps(mock_pod))
         temp_dir.rename(self.req_dir)
 
-        mock_inotify.event_gen.return_value = _read_all_events(self.inotify_inst)
-
-        hostfactory.watcher.watch_return_requests(self.workdir)
+        mock_k8s_client = mock.MagicMock()
+        request._process_pending_events(
+            request_dir=self.workdir / "return-requests",
+            k8s_client=mock_k8s_client,
+            workdir=self.workdir,
+            request_handler=return_machine.handle_machine,
+        )
 
         assert mock_delete_pod.call_count == 3
-        calls = [mock.call(f"machine{i}") for i in range(1, 4)]
+        # k8s_client, workdir, pod_name
+        calls = [mock.call(mock_k8s_client, f"machine{i}") for i in range(1, 4)]
         mock_delete_pod.assert_has_calls(calls, any_order=True)
 
         assert pathlib.Path(self.req_dir / ".processed").exists()

@@ -13,6 +13,8 @@ requests and pods in a Kubernetes cluster.
 Test processing of events.
 """
 
+import json
+import pathlib
 import tempfile
 from contextlib import closing
 
@@ -20,31 +22,98 @@ from hostfactory import events
 from hostfactory.cli import context
 
 
-def test_pod_events() -> None:
-    """Test pod events."""
+def test_post_events() -> None:
+    """Test pod events in directory"""
     with tempfile.TemporaryDirectory() as dirname:
-        context.GLOBAL.dbfile = ":memory:"
         context.GLOBAL.dirname = dirname
-        events.init_events_db()
 
-        events.post_events([("pod", "abcd-0", "request", "abcd")])
-        events.process_events(watch=False)
-
-        with closing(context.GLOBAL.conn.cursor()) as cur:
-            cur.execute("SELECT request, pending FROM pods")
-            result = cur.fetchone()
-            assert result == (
-                "abcd",
-                None,
+        with events.EventsBuffer() as buf:
+            buf.post(
+                {
+                    "category": "pod",
+                    "id": "abcd-0",
+                    "request": "abcd",
+                    "list": [1, 2, 3],
+                    "obj": {"foo": "bar", "hello": "world"},
+                }
             )
 
-        events.post_events([("pod", "abcd-0", "pending", 10001)])
-        events.process_events(watch=False)
+        found = False
+        for eventfile in pathlib.Path(dirname).iterdir():
+            if eventfile.name[0] == ".":
+                continue
+            payload = json.loads(eventfile.read_text())
+            assert isinstance(payload, list | tuple)
+            assert len(payload) == 1
+            event = payload[0]
+            assert event["category"] == "pod"
+            assert event["id"] == "abcd-0"
+            assert event["request"] == "abcd"
+            assert event["list"] == [1, 2, 3]
+            assert event["obj"] == {"foo": "bar", "hello": "world"}
+            found = True
+        assert found
 
-        with closing(context.GLOBAL.conn.cursor()) as cur:
-            cur.execute("SELECT request, pending FROM pods")
-            result = cur.fetchone()
-            assert result == (
-                "abcd",
-                10001,
-            )
+
+def test_sqlite_events_backend() -> None:
+    """Test pod events with sqlite."""
+    backend = events.SqliteEventBackend(":memory:")
+    backend.post(
+        [
+            {
+                "category": "pod",
+                "id": "abcd-0",
+                "request": "abcd",
+            }
+        ]
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events")
+        result = cur.fetchone()
+        assert result == (
+            "pod",
+            "abcd-0",
+            "request",
+            "abcd",
+        )
+
+    backend.post(
+        [
+            {
+                "category": "node",
+                "id": "abcd-1",
+                "pending": 10001,
+            }
+        ]
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events WHERE type='pending'")
+        result = cur.fetchone()
+        assert result == (
+            "node",
+            "abcd-1",
+            "pending",
+            "10001",
+        )
+
+    backend.post(
+        [
+            {
+                "category": "event",
+                "id": "abcd-2",
+                "event": {"foo": "bar", "hello": "world"},
+            }
+        ]
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events WHERE type='event'")
+        result = cur.fetchone()
+        assert result == (
+            "event",
+            "abcd-2",
+            "event",
+            """{"foo": "bar", "hello": "world"}""",
+        )
