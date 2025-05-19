@@ -121,7 +121,7 @@ class TestRequestMachines(unittest.TestCase):
             ],
         )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
 
         # Assert that json output does not raise any errors
         json_output = json.loads(result.output)
@@ -169,7 +169,7 @@ class TestRequestReturnMachines(unittest.TestCase):
             ],
         )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
 
         json_output = json.loads(result.output)
         assert json_output is not None

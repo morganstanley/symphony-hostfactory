@@ -9,5 +9,5 @@ spec:
   restartPolicy: Never
   containers:
     - name: hello
-      image: {{ image }}
+      image: {{ HF_K8S_IMAGE_URL }}
       command: ['sh', '-c', 'echo "Hello, Kubernetes!" && sleep 3600']

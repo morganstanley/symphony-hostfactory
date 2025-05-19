@@ -86,7 +86,6 @@ def delete_pods_in_namespace(pod_count: int = 0, sleep_duration: int = 5) -> Non
             name=pod.metadata.name, namespace=namespace
         )
     while len(get_pods_in_current_namespace().items) > target_count:
-        # TODO sleep should be configurable
         sleep(sleep_duration)
         logger.info(
             "Waiting for namespace to clean up from deleted pods, sleeping %s s",

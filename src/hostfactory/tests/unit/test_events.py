@@ -22,16 +22,21 @@ from hostfactory import events
 from hostfactory.cli import context
 
 
-def test_post_event() -> None:
+def test_post_events() -> None:
     """Test pod events in directory"""
     with tempfile.TemporaryDirectory() as dirname:
         context.GLOBAL.dirname = dirname
 
-        events.post_event(
-            category="pod",
-            id="abcd-0",
-            request="abcd",
-        )
+        with events.EventsBuffer() as buf:
+            buf.post(
+                {
+                    "category": "pod",
+                    "id": "abcd-0",
+                    "request": "abcd",
+                    "list": [1, 2, 3],
+                    "obj": {"foo": "bar", "hello": "world"},
+                }
+            )
 
         found = False
         for eventfile in pathlib.Path(dirname).iterdir():
@@ -44,6 +49,8 @@ def test_post_event() -> None:
             assert event["category"] == "pod"
             assert event["id"] == "abcd-0"
             assert event["request"] == "abcd"
+            assert event["list"] == [1, 2, 3]
+            assert event["obj"] == {"foo": "bar", "hello": "world"}
             found = True
         assert found
 
@@ -52,11 +59,13 @@ def test_sqlite_events_backend() -> None:
     """Test pod events with sqlite."""
     backend = events.SqliteEventBackend(":memory:")
     backend.post(
-        {
-            "category": "pod",
-            "id": "abcd-0",
-            "request": "abcd",
-        }
+        [
+            {
+                "category": "pod",
+                "id": "abcd-0",
+                "request": "abcd",
+            }
+        ]
     )
 
     with closing(backend.conn.cursor()) as cur:
@@ -70,19 +79,41 @@ def test_sqlite_events_backend() -> None:
         )
 
     backend.post(
-        {
-            "category": "pod",
-            "id": "abcd-0",
-            "pending": 10001,
-        }
+        [
+            {
+                "category": "node",
+                "id": "abcd-1",
+                "pending": 10001,
+            }
+        ]
     )
 
     with closing(backend.conn.cursor()) as cur:
         cur.execute("SELECT category, id, type, value FROM events WHERE type='pending'")
         result = cur.fetchone()
         assert result == (
-            "pod",
-            "abcd-0",
+            "node",
+            "abcd-1",
             "pending",
             "10001",
+        )
+
+    backend.post(
+        [
+            {
+                "category": "event",
+                "id": "abcd-2",
+                "event": {"foo": "bar", "hello": "world"},
+            }
+        ]
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events WHERE type='event'")
+        result = cur.fetchone()
+        assert result == (
+            "event",
+            "abcd-2",
+            "event",
+            """{"foo": "bar", "hello": "world"}""",
         )
