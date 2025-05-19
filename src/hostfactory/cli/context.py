@@ -27,6 +27,9 @@ class Context:
         self.confdir = None
         self.templates_path = None
         self.machine_timeout = None
+        self.cleanup_interval = 30
+        self.node_refresh_interval = 300
+        self.request_id = None
 
     @property
     def default_workdir(self) -> str:

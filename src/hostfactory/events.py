@@ -37,7 +37,7 @@ from tenacity import retry_if_exception_type
 from tenacity import stop_after_attempt
 from tenacity import wait_exponential
 
-from hostfactory import atomic_write
+from hostfactory import fsutils
 from hostfactory.cli import context
 
 logger = logging.getLogger(__name__)
@@ -65,9 +65,10 @@ class ConsoleEventBackend:
         self.fd = sys.stderr if use_stderr else sys.stdout
         self.indent = indent
 
-    def post(self, event):
+    def post(self, events):
         """Post event to the console"""
-        print(json.dumps(event, indent=self.indent), file=self.fd, flush=True)
+        for event in events:
+            print(json.dumps(event, indent=self.indent), file=self.fd, flush=True)
 
     def close(self):
         """N/A"""
@@ -101,6 +102,19 @@ class SqliteEventBackend:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS events_idx ON events(
+                    hf_namespace,
+                    hf_pod,
+                    category,
+                    id,
+                    timestamp,
+                    type,
+                    value
+                )
+                """
+            )
 
         self.known_columns = frozenset(
             (
@@ -112,34 +126,71 @@ class SqliteEventBackend:
             )
         )
 
-    def post(self, event):
-        """Post given event to the underlying SQLite db"""
-        known = []
-        rows = []
-        for k, v in event.items():
-            if k in self.known_columns:
-                known.append((k, v))
-            else:
-                rows.append((k, v))
+    def _prepare_event_for_db(self, event: dict[str, Any]) -> list[tuple[Any]] | None:
+        """Prepare event for SQLite database."""
+        # Initialize the formatted event with known columns
+        known_columns_data = {col: event.get(col, "") for col in self.known_columns}
 
-        if not rows:
+        # Find the first unknown column (SQLite schema supports one type-value pair)
+        unknown_columns_data = [
+            (k, v) for k, v in event.items() if k not in self.known_columns and v
+        ]
+
+        if unknown_columns_data:
+            # Format the event by merging known columns with the unknown column's
+            # type and value
+            formatted_event_values = []
+            for key, value in unknown_columns_data:
+                type_value_pair = {
+                    "type": key,
+                    "value": (
+                        value
+                        if isinstance(value, int | float | str)
+                        else json.dumps(value, sort_keys=True)
+                    ),
+                }
+
+                # Sort the merged dictionary and get the values alone in tuple
+                formatted_event_data = tuple(
+                    value
+                    for _, value in sorted(
+                        (known_columns_data | type_value_pair).items()
+                    )
+                )
+
+                formatted_event_values.append(formatted_event_data)
+
+            return formatted_event_values
+
+        # No unknown columns, skip this event
+        return None
+
+    def post(self, events: list[dict[str, Any]]) -> None:
+        """Post given events to the underlying SQLite database."""
+        if not events:
             return
 
-        names = [i[0] for i in known]
-        names.append("type")
-        names.append("value")
-        values = [i[1] for i in known]
-        values.append(None)
-        values.append(None)
-        assert len(names) == len(values)  # noqa: S101
-        names_str = ",".join(names)
-        values_str = ",".join("?" for _ in range(len(values)))
-        sql = f"INSERT INTO events ({names_str}) VALUES ({values_str})"  # noqa: S608
+        db_events = []
+        for event in events:
+            formatted_event = self._prepare_event_for_db(event)
+            if formatted_event:
+                db_events.extend(formatted_event)
+
+        # Prepare SQL query components
+        sorted_columns = sorted(self.known_columns | {"type", "value"})
+        columns_str = ", ".join(sorted_columns)
+        placeholders = ", ".join("?" for _ in sorted_columns)
+
+        # Execute the query in a single transaction
         with self.conn as conn:
-            for t, v in rows:
-                values[-2] = t
-                values[-1] = v
-                conn.execute(sql, tuple(values))
+            conn.executemany(
+                f"""
+                INSERT INTO events ({columns_str}) VALUES ({placeholders})
+                ON CONFLICT DO NOTHING
+                """,  # noqa: S608
+                db_events,
+            )
+        logger.info("Inserted events into the database: %s", db_events)
 
     def close(self):
         """Close the db"""
@@ -156,20 +207,22 @@ def _pending_events(eventdir) -> tuple[pathlib.Path]:
 
 
 def _process_events(backends, eventfiles) -> None:
+    """Process events from the given list of event files."""
+    all_events = []
     for eventfile in eventfiles:
         logger.info("Processing event in: %s", eventfile)
         try:
-            try:
-                events = json.loads(eventfile.read_text())
-            except ValueError:
-                continue
+            events = json.loads(eventfile.read_text())
             if not isinstance(events, list | tuple):
                 events = [events]
-            for backend in backends:
-                for event in events:
-                    backend.post(event)
+            all_events.extend(events)
+        except ValueError:
+            logger.warning("Invalid JSON in file: %s", eventfile)
         finally:
             eventfile.unlink(missing_ok=True)
+
+    for backend in backends:
+        backend.post(all_events)
 
 
 @retry(
@@ -209,44 +262,38 @@ def process_events(watch=True) -> None:
             backend.close()
 
 
-def post_event(*args: list[dict[str, Any]], **kwargs: dict[str, Any]) -> None:
-    """Post a single event."""
-    if args:
-        assert len(args) == 1  # noqa: S101
-        post_events(args[0])
-    else:
-        post_events(kwargs)
-
-
-def post_events(*events: list[dict[str, Any]]) -> None:
-    """Post multiple events."""
-    timestamp = int(time())
-
-    buf = []
-    for event in events:
-        if isinstance(event, list | tuple):
-            buf.extend(event)
-        else:
-            buf.append(event)
-
-    for event in buf:
-        assert isinstance(event, dict)  # noqa: S101
-        if "timestamp" not in event:
-            event["timestamp"] = timestamp
-
-    filename = f"{int(time() * 1000)}-{uuid4()}"
-    atomic_write(
-        [EXTRA_METADATA | event for event in buf],
-        pathlib.Path(context.GLOBAL.dirname) / filename,
-    )
-
-
+# TODO(andreik): what exactly is it batching? From the code, it looks like
+# it accumulates events in the internal list, and then dumps them all into
+# file system on exit. How is it different from creating files at the moment
+# of event generation?
+#
+# The only potential reason to batch events is to generate single transaction
+# in sqlite - as right now, every even is inserted as part of transaction
+# and it is "potentially" slow. Remains to be seen if this is the case... but
+# it is suboptimal as far as classic SQLite usage is concerned.
 class EventsBuffer:
     """Context manager for batched event push"""
 
     def __init__(self) -> None:
         """Prepare a fresh events buffer"""
         self.events: list[dict[str, Any]] = []
+
+    def _flush(self) -> None:
+        if self.events:
+            filename = f"{uuid4()}"
+            fsutils.atomic_write(
+                [EXTRA_METADATA | event for event in self.events],
+                pathlib.Path(context.GLOBAL.dirname) / filename,
+            )
+            self.events = []
+
+    def _buffer(self, *events: list[dict[str, Any]]) -> None:
+        timestamp = int(time())
+        for event in events:
+            assert isinstance(event, dict)  # noqa: S101
+            if event.get("timestamp") is None:
+                event["timestamp"] = timestamp
+            self.events.append(event)
 
     def __enter__(self) -> "EventsBuffer":
         """Enter the context manager"""
@@ -255,16 +302,14 @@ class EventsBuffer:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool | None:
         """Exit the context manager"""
-        if exc_type is None and self.events:
-            post_events(self.events)
-            self.events = []
+        self._flush()
         return None
 
     def post(self, *args: list[Any], **kwargs: dict[str, Any]):
         """Buffer event(s)."""
         if args:
             assert not kwargs  # noqa: S101
-            self.events.extend(args)
+            self._buffer(*args)
         else:
             assert kwargs  # noqa: S101
-            self.events.append(kwargs)
+            self._buffer(kwargs)

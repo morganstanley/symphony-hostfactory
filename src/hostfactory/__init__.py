@@ -16,8 +16,9 @@ Common utilities.
 import functools
 import json
 import logging
-import os
 import pathlib
+import random
+import string
 import sys
 import tempfile
 import traceback
@@ -37,21 +38,15 @@ logger = logging.getLogger(__name__)
 EXIT_CODE_DEFAULT = 1
 
 
-def atomic_symlink(src, dst):
-    """Atomically create a symlink from `src` to `dst`."""
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix=".",
-            dir=os.path.dirname(dst),  # noqa: PTH120
-        ) as tf:
-            temp_path = tf.name
-        os.symlink(src, temp_path)
-        os.rename(temp_path, dst)  # noqa: PTH104
-    except OSError as exc:
-        logger.exception("Exception occurred: %s", exc)
-        raise RuntimeError from exc
-
-    return dst
+def generate_short_uuid() -> str:
+    """Generates a short UUID for hfreqid.
+    Returns:
+        str: A short UUID string of length 12.
+    """
+    alphabet = string.ascii_lowercase + string.digits
+    return random.choice(string.ascii_lowercase) + "".join(
+        random.choices(alphabet, k=11)
+    )
 
 
 def atomic_write(data, dst):
@@ -69,7 +64,7 @@ def atomic_write(data, dst):
         ) as tf:
             tf.write(data)
             tf.flush()
-            os.rename(tf.name, dst)  # noqa: PTH104
+            pathlib.Path.rename(pathlib.Path(tf.name), dst)
     except OSError as exc:
         logger.exception("Exception occurred: %s", exc)
         raise RuntimeError from exc
@@ -84,6 +79,11 @@ class DateTimeEncoder(json.JSONEncoder):
         """Convert the given date object to a JSON-serializable format."""
         if isinstance(o, datetime):
             return int(o.timestamp())
+
+        try:
+            return o.to_dict()
+        except AttributeError:
+            pass
 
         return super().default(o)
 

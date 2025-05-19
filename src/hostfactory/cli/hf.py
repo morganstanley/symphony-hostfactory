@@ -28,9 +28,14 @@ from hostfactory import cli
 from hostfactory import events as hfevents
 from hostfactory import hfcleaner
 from hostfactory import k8sutils
-from hostfactory import watcher as hfwatcher
 from hostfactory.cli import context
 from hostfactory.cli import log_handler
+from hostfactory.impl.watchers import kube_watcher
+from hostfactory.impl.watchers import node_watcher
+from hostfactory.impl.watchers import pod_watcher
+from hostfactory.impl.watchers import request
+from hostfactory.impl.watchers import request_machine
+from hostfactory.impl.watchers import return_machine
 
 ON_EXCEPTIONS = hostfactory.handle_exceptions(
     [
@@ -78,8 +83,15 @@ logger = logging.getLogger(__name__)
     help="Hostfactory config directory location.",
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
 )
+@click.option(
+    "--request-id",
+    required=False,
+    envvar="HF_K8S_REQUEST_ID",
+    help="Request ID for the request.",
+    type=str,
+)
 @ON_EXCEPTIONS
-def run(proxy, log_level, log_file, workdir, confdir) -> None:
+def run(proxy, log_level, log_file, workdir, confdir, request_id) -> None:  # noqa PLR0913
     """Entry point for the hostfactory command group.
     Example usage:
     $ hostfactory request-machines <json_file>
@@ -100,21 +112,22 @@ def run(proxy, log_level, log_file, workdir, confdir) -> None:
             [confdir, context.GLOBAL.default_templates_filename]
         )
 
+    if not request_id:
+        context.GLOBAL.request_id = hostfactory.generate_short_uuid()
+    else:
+        context.GLOBAL.request_id = request_id
+
     log_handler.setup_logging(log_level, log_file)
 
     logger.info("Workdir: %s", workdir)
     for dirname in [
-        "requests",
-        "return-requests",
-        "pods",
-        "nodes",
         "events",
         "kube-events",
-        "kube-events/Node",
-        "deleted-pods",
         "nodes",
-        "deleted-nodes",
-        "events",
+        "pods",
+        "pods-status",
+        "requests",
+        "return-requests",
     ]:
         pathlib.Path(context.GLOBAL.workdir, dirname).mkdir(parents=True, exist_ok=True)
 
@@ -133,12 +146,35 @@ def get_available_templates() -> None:
     cli.output(json.dumps(response, indent=4))
 
 
+def validate_request_file(ctx, param, file_obj):
+    """Validate the request JSON file input."""
+    logger.debug(
+        "Validating param [%s] with value [%s] in context %s", param.name, file_obj, ctx
+    )
+    try:
+        content = json.load(file_obj)
+        if not isinstance(content, dict):
+            raise click.BadParameter("Input must be a JSON object")
+        if "template" not in content:
+            raise click.BadParameter("Missing 'template' field")
+        if not isinstance(content["template"], dict):
+            raise click.BadParameter("'template' must be an object")
+        if "machineCount" not in content["template"]:
+            raise click.BadParameter("Missing 'machineCount' in template")
+        if "templateId" not in content["template"]:
+            raise click.BadParameter("Missing 'templateId' in template")
+        return content
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter("Invalid JSON format") from exc
+
+
 @run.command()
 @click.argument(
     "json_file",
     type=click.File("r"),
     required=True,
     default=sys.stdin,
+    callback=validate_request_file,
 )
 @ON_EXCEPTIONS
 def request_machines(json_file) -> None:
@@ -148,16 +184,17 @@ def request_machines(json_file) -> None:
             'Option "hostfactory --confdir" '
             'or envvar "HF_K8S_PROVIDER_CONFDIR" is required.'
         )
-    file_content = json_file.read().rstrip("\n")
-    request = json.loads(file_content)
-    logger.info("request_machines: %s", request)
+    logger.debug("request_machines: %s", json_file)
 
-    # TODO(andreik): handle input validation
-    count = request["template"]["machineCount"]
-    template_id = request["template"]["templateId"]
+    count = json_file["template"]["machineCount"]
+    template_id = json_file["template"]["templateId"]
 
     response = hfapi.request_machines(
-        context.GLOBAL.workdir, context.GLOBAL.templates_path, template_id, count
+        context.GLOBAL.workdir,
+        context.GLOBAL.templates_path,
+        template_id,
+        count,
+        context.GLOBAL.request_id,
     )
 
     logger.debug("request-machines response: %s", response)
@@ -179,7 +216,9 @@ def request_return_machines(json_file) -> None:
     logger.info("request_return_machines: %s", request)
     machines = request["machines"]
 
-    response = hfapi.request_return_machines(context.GLOBAL.workdir, machines)
+    response = hfapi.request_return_machines(
+        context.GLOBAL.workdir, machines, context.GLOBAL.request_id
+    )
 
     logger.debug("request-return-machines Response: %s", response)
     cli.output(json.dumps(response, indent=4))
@@ -251,7 +290,14 @@ def run_cleaner(timeout, run_once, dry_run) -> None:
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Running cleaner at %s", workdir)
     k8s_client = k8sutils.get_kubernetes_client()
-    hfcleaner.run(k8s_client, workdir, timeout, run_once, dry_run)
+    hfcleaner.run(
+        k8s_client,
+        workdir,
+        timeout,
+        None if run_once else context.GLOBAL.cleanup_interval,
+        dry_run,
+        context.GLOBAL.node_refresh_interval,
+    )
 
 
 @run.group()
@@ -266,7 +312,7 @@ def watch_pods() -> None:
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf k8s pods at %s", workdir)
-    hfwatcher.watch_pods(workdir)
+    pod_watcher.watch(pathlib.Path(workdir))
 
 
 @watch.command(name="request-machines")
@@ -277,7 +323,12 @@ def watch_request_machines() -> None:
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf request-machines at %s", workdir)
     k8s_client = k8sutils.get_kubernetes_client()
-    hfwatcher.watch_requests(workdir, k8s_client)
+    request.watch(
+        request_dir=pathlib.Path(workdir) / "requests",
+        k8s_client=k8s_client,
+        workdir=workdir,
+        request_handler=request_machine.handle_machine,
+    )
 
 
 @watch.command(name="request-return-machines")
@@ -288,7 +339,12 @@ def watch_request_return_machines() -> None:
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf request-return-machines at %s", workdir)
     k8s_client = k8sutils.get_kubernetes_client()
-    hfwatcher.watch_return_requests(workdir, k8s_client)
+    request.watch(
+        request_dir=pathlib.Path(workdir) / "return-requests",
+        k8s_client=k8s_client,
+        workdir=workdir,
+        request_handler=return_machine.handle_machine,
+    )
 
 
 @watch.command(name="events")
@@ -317,7 +373,7 @@ def nodes() -> None:
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf k8s nodes at %s", workdir)
-    hfwatcher.watch_nodes(workdir)
+    node_watcher.watch(workdir=pathlib.Path(workdir))
 
 
 @watch.command()
@@ -326,5 +382,5 @@ def kube_events() -> None:
     """Watch for kubernetes events."""
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
-    logger.info("Watching for kubernetes events at %s", workdir)
-    hfwatcher.watch_kube_events(workdir)
+    logger.info("Watching for k8s nodes at %s", workdir)
+    kube_watcher.watch(workdir=pathlib.Path(workdir))

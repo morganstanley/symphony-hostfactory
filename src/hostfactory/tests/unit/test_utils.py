@@ -18,7 +18,7 @@ import pathlib
 import shutil
 import tempfile
 
-import hostfactory
+from hostfactory import fsutils
 
 
 def test_atomic_symlink() -> None:
@@ -26,16 +26,16 @@ def test_atomic_symlink() -> None:
     workdir = tempfile.mkdtemp()
     link = os.path.join(workdir, "1")  # noqa: PTH118
 
-    hostfactory.atomic_symlink("/foo/bar", link)
+    fsutils.atomic_symlink("/foo/bar", link)
     assert os.readlink(link) == "/foo/bar"  # noqa: PTH115
 
-    hostfactory.atomic_symlink("/foo/baz", link)
+    fsutils.atomic_symlink("/foo/baz", link)
     assert os.readlink(link) == "/foo/baz"  # noqa: PTH115
 
     os.unlink(link)  # noqa: PTH108
 
     pathlib.Path(link).touch()
-    hostfactory.atomic_symlink("/foo/baz", link)
+    fsutils.atomic_symlink("/foo/baz", link)
     assert os.readlink(link) == "/foo/baz"  # noqa: PTH115
 
     shutil.rmtree(workdir)

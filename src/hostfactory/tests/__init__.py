@@ -74,14 +74,15 @@ def cleanup_provider_conf() -> None:
 
 def get_workdir() -> str:
     """creates a tempdir for testing if HF_K8S_WORKDIR is not set"""
-    temp_dir = os.getenv("HF_K8S_WORKDIR")
-    if temp_dir:
-        return temp_dir
-
-    if os.getenv("USER"):
-        test_dir = pathlib.Path(f"/tmp/hostfactory-test-{os.getenv('USER')}/")  # noqa: S108
+    workdir = os.getenv("HF_K8S_WORKDIR")
+    if not workdir:
+        user = os.getenv("USER")
+        if user:
+            workdir = pathlib.Path(f"/tmp/hostfactory-test-{user}/")  # noqa: S108
+        else:
+            workdir = pathlib.Path("/tmp/hostfactory-test/")  # noqa: S108
     else:
-        test_dir = pathlib.Path("/tmp/hostfactory-test/")  # noqa: S108
+        workdir = pathlib.Path(workdir)
 
-    test_dir.mkdir(parents=True, exist_ok=True)
-    return str(test_dir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    return str(workdir)

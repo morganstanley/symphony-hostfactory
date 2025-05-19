@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 import click.testing
 
-from hostfactory import atomic_symlink
+from hostfactory import fsutils
 from hostfactory.cli.hf import run as hostfactory
 from hostfactory.tests import get_workdir
 
@@ -37,7 +37,6 @@ def _run_cli(module, args) -> click.testing.Result:
 
 @mock.patch("hostfactory.k8sutils.get_kubernetes_client", return_value=MagicMock())
 @mock.patch("hostfactory.k8sutils.load_k8s_config", return_value=None)
-@mock.patch("hostfactory.events.post_events", return_value=None)
 @mock.patch("hostfactory.hfcleaner._delete_k8s_pod")
 @mock.patch("hostfactory.hfcleaner._is_timeout_reached")
 class TestHFCleaner(unittest.TestCase):
@@ -46,9 +45,9 @@ class TestHFCleaner(unittest.TestCase):
     def setUp(self) -> None:
         """Set up the test environment"""
         self.workdir = get_workdir()
-        self.pods_dir = pathlib.Path(f"{self.workdir}/pods")
+        self.pods_dir = pathlib.Path(f"{self.workdir}/pods-status")
         self.pods_dir.mkdir(parents=True, exist_ok=True)
-        atomic_symlink("creating", (self.pods_dir / "test-pod-id"))
+        fsutils.atomic_symlink("creating", (self.pods_dir / "test-pod-id"))
 
     def tearDown(self) -> None:
         """Tear down the test environment"""
@@ -58,7 +57,6 @@ class TestHFCleaner(unittest.TestCase):
         self,
         mock_timeout,
         mock_delete,
-        _mock_events,
         _mock_load_config,
         _mock_k8sclient,
     ) -> None:
@@ -76,7 +74,6 @@ class TestHFCleaner(unittest.TestCase):
         self,
         mock_timeout,
         mock_delete,
-        _mock_events,
         _mock_load_config,
         _mock_k8sclient,
     ) -> None:
