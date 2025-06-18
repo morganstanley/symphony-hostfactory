@@ -15,10 +15,10 @@ Test hostfactory api module.
 
 import contextlib
 import pathlib
+import tempfile
 import shutil
 from typing import Generator
 from unittest import mock
-import tempfile
 
 import pytest
 
@@ -65,7 +65,6 @@ def temp_workdir() -> Generator[pathlib.Path, None, None]:
 
     Cleans up the directory and its contents after the test.
     """
-
     test_dir = pathlib.Path(tempfile.mkdtemp(prefix="test-"))
     try:
         yield test_dir
