@@ -18,6 +18,7 @@ import pathlib
 import shutil
 from typing import Generator
 from unittest import mock
+import tempfile
 
 import pytest
 
@@ -64,7 +65,6 @@ def temp_workdir() -> Generator[pathlib.Path, None, None]:
 
     Cleans up the directory and its contents after the test.
     """
-    import tempfile
 
     test_dir = pathlib.Path(tempfile.mkdtemp(prefix="test-"))
     try:
