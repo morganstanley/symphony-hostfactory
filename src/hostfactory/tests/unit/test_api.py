@@ -15,8 +15,8 @@ Test hostfactory api module.
 
 import contextlib
 import pathlib
-import tempfile
 import shutil
+import tempfile
 from typing import Generator
 from unittest import mock
 
