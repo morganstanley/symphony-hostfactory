@@ -58,14 +58,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run flake8 and generate report
-        uses: py-actions/flake8@v2
+        uses: py-actions/flake8@v3
         with:
           args: --config .github/conf/flake8.conf --output-file ${{ env.FLAKE8_REPORT_FILE }}
           plugins: 'flake8-sarif'
         continue-on-error: true
 
       - name: Upload flake8 scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: success() || failure()
         with:
           sarif_file: "${{ env.FLAKE8_REPORT_FILE }}"
