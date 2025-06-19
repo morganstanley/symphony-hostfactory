@@ -11,9 +11,6 @@ description = "Symphony k8s deployment tools"
 readme = "README.md"
 requires-python = "<= 3.12.9, >=3.12"
 
-# dynamic = ["version"]
-version = "1.0.0"
-
 dependencies = [
     "click>=8",
     "kubernetes",
@@ -26,6 +23,7 @@ dependencies = [
     "wrapt",
     "pydantic",
     "tenacity",
+    "setuptools_scm",
 ]
 
 [project.optional-dependencies]
@@ -110,3 +108,5 @@ files.extend-exclude = ["*.json"]
 requestor = "requestor"
 nin = "nin"
 
+[tool.setuptools_scm]
+version_scheme = "post-release"
