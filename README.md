@@ -73,7 +73,7 @@ Watches the kubernetes event loop for new/modified/deleted pods and captures the
 
 Today, the only supported python version is 3.12.
 
-```
+```bash
 pip install hostfactory
 ```
 
@@ -87,7 +87,7 @@ Supposing you have a valid kubernetes config, the following commands will schedu
 
 ```bash
 mkdir /tmp/hostfactory
-hostfactory-admin request-machines | hostfactory --configdir config_example/ request-machines
+hostfactory-admin request-machines | hostfactory --confdir documentation/config_example/ request-machines
 hostfactory watch request-machines
 ```
 
