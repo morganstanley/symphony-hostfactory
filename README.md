@@ -69,6 +69,27 @@ Watches hostfactory provider return requests and deletes the pods.
 - `hostfactory watch pods`
 Watches the kubernetes event loop for new/modified/deleted pods and captures them on disk.
 
+## Installation
+
+Today, the only supported python version is 3.12.
+
+```
+pip install hostfactory
+```
+
+### Pod spec
+
+An example pod spec can be found at [example pod spec](src/hostfactory/tests/regression/vanilla-spec.yaml)
+
+### Running the provider
+
+Supposing you have a valid kubernetes config, the following commands will schedule a pod.
+
+```bash
+mkdir /tmp/hostfactory
+hostfactory-admin request-machines | hostfactory --configdir config_example/ request-machines
+hostfactory watch request-machines
+```
 
 ## Testing
 
