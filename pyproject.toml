@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "hatchling",
+    "hatchling", "hatch-vcs"
 ]
 build-backend = "hatchling.build"
 
