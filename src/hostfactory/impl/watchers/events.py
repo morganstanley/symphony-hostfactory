@@ -532,7 +532,7 @@ class SqliteEventBackend:
                 self._create_backup(event)
                 continue
             category = event.get("category", None)
-            if "state" in category or category == "metric":
+            if category and ("state" in category or category == "metric"):
                 continue
             formatted_event = self._prepare_event_for_db(event)
             if formatted_event:
