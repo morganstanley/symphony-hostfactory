@@ -44,7 +44,7 @@ def _get_iso_timestamp(record: logging.LogRecord) -> str:
 class TraceIDFilter(logging.Filter):
     """Custom logging filter to add a trace ID from the environment."""
 
-    def filter(self, record):
+    def filter(self: "TraceIDFilter", record) -> bool:
         """Add trace ID to the log record."""
         record.trace_id = context.GLOBAL.request_id
         return True
@@ -53,8 +53,9 @@ class TraceIDFilter(logging.Filter):
 class ISO8601Formatter(logging.Formatter):
     """Custom formatter to include timezone name in ISO 8601 format."""
 
-    def formatTime(self, record, datefmt=None):  # noqa: N802, ARG002
+    def formatTime(self: "ISO8601Formatter", record, datefmt=None) -> str:  # noqa: N802
         """Format the time with timezone name in ISO 8601 format."""
+        del datefmt  # Unused
         return _get_iso_timestamp(record)
 
 

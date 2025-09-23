@@ -21,6 +21,8 @@ import click
 
 from hostfactory import cli
 from hostfactory import events
+from hostfactory import fsutils
+from hostfactory import hfreplay
 from hostfactory.cli import context
 from hostfactory.cli import log_handler
 from hostfactory.impl import hfadmin as impl
@@ -35,7 +37,7 @@ def _list_subdirectories_by_creation_time(directory) -> list:
     :return: List of subdirectory paths ordered by creation time.
     """
     dir_path = pathlib.Path(directory)
-    subdirs = [entry for entry in dir_path.iterdir() if entry.is_dir()]
+    subdirs = fsutils.iterate_directory(directory=dir_path, directories_only=True)
     subdirs.sort(key=lambda subdir: subdir.stat().st_ctime)
 
     return [subdir.name for subdir in subdirs]
@@ -68,21 +70,17 @@ def _get_machines(workdir) -> list:
     requests_dir = pathlib.Path(workdir + "/requests")
     machines = []
 
-    for request_dir in requests_dir.iterdir():
-        if request_dir.is_dir():
-            machines.extend(
-                [
-                    entry.name
-                    for entry in request_dir.iterdir()
-                    if not entry.name.startswith(".")
-                ]
-            )
+    for request_dir in fsutils.iterate_directory(
+        directory=requests_dir, directories_only=True
+    ):
+        machines.extend(
+            [item.name for item in fsutils.iterate_directory(directory=request_dir)]
+        )
 
     return machines
 
 
 @click.group(name="hostfactoryadmin")
-@click.pass_context
 @click.option(
     "--workdir",
     default=context.GLOBAL.default_workdir,
@@ -104,37 +102,32 @@ def _get_machines(workdir) -> list:
     help="Hostfactory log file location.",
     type=click.Path(exists=False, file_okay=True, dir_okay=False, writable=True),
 )
-def run(ctx, workdir, log_level, log_file) -> None:
+def run(workdir, log_level, log_file) -> None:
     """Entry point for the hostfactoryadmin command group."""
     if not pathlib.Path(workdir).is_dir():
         raise ValueError("Invalid workdir: [%s] is not a directory.", workdir)
 
-    ctx.obj = {"workdir": workdir}
+    context.GLOBAL.workdir = workdir
 
     log_handler.setup_logging(log_level=log_level, log_file=log_file)
 
 
 @run.command()
-@click.pass_context
-def list_machines(ctx) -> None:
+def list_machines() -> None:
     """List all machines."""
-    workdir = ctx.obj.get("workdir")
-    for _name in _get_machines(workdir):
+    for _name in _get_machines(context.GLOBAL.workdir):
         cli.output(_name)
 
 
 @run.command()
-@click.pass_context
-def list_requests(ctx) -> None:
+def list_requests() -> None:
     """List all requests."""
-    workdir = ctx.obj.get("workdir")
-    for req in _get_requests(workdir):
+    for req in _get_requests(context.GLOBAL.workdir):
         click.echo(req)
 
 
 # TODO enum for pods states
 @run.command()
-@click.pass_context
 @click.option(
     "--from-event",
     default="created",
@@ -147,11 +140,11 @@ def list_requests(ctx) -> None:
     help="To event",
     type=click.Choice(["running", "created"]),
 )
-def get_timings(ctx, from_event: str, to_event: str) -> None:
+def get_timings(from_event: str, to_event: str) -> None:
     """Get the timings of the requests."""
-    workdir = ctx.obj["workdir"]
-
-    average = events.event_average(workdir, event_from=from_event, event_to=to_event)
+    average = events.event_average(
+        context.GLOBAL.workdir, event_from=from_event, event_to=to_event
+    )
     cli.output(f"Average time between events: {average}")
 
 
@@ -181,11 +174,10 @@ def request_return_machines(machines) -> None:
 
 
 @run.command()
-@click.pass_context
 @click.option("--return-requests", is_flag=True, help="Get status for return requests.")
-def get_request_status(ctx, return_requests) -> None:
+def get_request_status(return_requests) -> None:
     """Get the status of a request."""
-    workdir = ctx.obj.get("workdir")
+    workdir = context.GLOBAL.workdir
     if return_requests:
         requests = _get_return_requests(workdir)
     else:
@@ -196,11 +188,13 @@ def get_request_status(ctx, return_requests) -> None:
 
 
 @run.command()
-@click.pass_context
-def get_return_requests(ctx) -> None:
+def get_return_requests() -> None:
     """Get the status of a return request."""
-    workdir = ctx.obj.get("workdir")
-    data = {"machines": [{"name": entry} for entry in _get_machines(workdir) if entry]}
+    data = {
+        "machines": [
+            {"name": entry} for entry in _get_machines(context.GLOBAL.workdir) if entry
+        ]
+    }
     cli.output(json.dumps(data))
 
 
@@ -220,3 +214,37 @@ def drain_nodes(count, sleep) -> None:
     """Drain nodes."""
     deleted_count = impl.drain_node_in_namespace(node_count=count, sleep_duration=sleep)
     cli.output(f"Deleted {deleted_count} pods from nodes")
+
+
+@run.command()
+@click.option(
+    "--wait",
+    is_flag=True,
+    help="Wait for timestamp difference between events before replay.",
+)
+@click.option(
+    "--confdir",
+    envvar="HF_K8S_PROVIDER_CONFDIR",
+    help="Hostfactory config directory location.",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+)
+@click.option("--dbfile", help="Events database file.")
+def replay(dbfile, confdir, wait) -> None:
+    """Replay the hostfactory events."""
+    if confdir:
+        context.GLOBAL.templates_path = "/".join(
+            [confdir, context.GLOBAL.default_templates_filename]
+        )
+    else:
+        raise click.UsageError(
+            'Option "hostfactory-admin replay --confdir" '
+            'or envvar "HF_K8S_PROVIDER_CONFDIR" is required.'
+        )
+
+    if not dbfile:
+        dbfile = pathlib.Path(context.GLOBAL.workdir) / "events.db"
+
+    context.GLOBAL.dbfile = dbfile
+
+    logger.info("Replaying events from db file %s", dbfile)
+    hfreplay.replay(dbfile, wait)

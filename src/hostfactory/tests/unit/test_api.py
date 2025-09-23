@@ -17,7 +17,7 @@ import contextlib
 import pathlib
 import shutil
 import tempfile
-from typing import Generator
+from collections.abc import Generator
 from unittest import mock
 
 import pytest
@@ -270,17 +270,13 @@ def test_request_return_machines(
     "hostfactory.api._resolve_machine_status", return_value=("running", "succeed")
 )
 @mock.patch("hostfactory.api._load_pod_file", return_value=mock_pod)
-@mock.patch("hostfactory.api.pathlib.Path.iterdir", return_value=[pathlib.Path("pod1")])
-@mock.patch("hostfactory.api.pathlib.Path.exists", return_value=True)
-@mock.patch("hostfactory.api.pathlib.Path.readlink", return_value=pathlib.Path("pod1"))
-@mock.patch("hostfactory.api.pathlib.Path.is_symlink", return_value=False)
+@mock.patch(
+    "hostfactory.fsutils.iterate_directory", return_value=[pathlib.Path("pod1")]
+)
 @mock.patch("hostfactory.api._is_return_request", return_value=False)
 def test_get_request_status(
     _mock_is_return_request,
-    _mock_is_symlink,
-    _mock_readlink,
-    _mock_exists,
-    _mock_iterdir,
+    _mock_iterator_directory,
     mock_load_pod_file,
     mock_resolve_machine_status,
     mock_get_machines_dir,
@@ -327,8 +323,10 @@ def test_get_request_status(
 
 @mock.patch("hostfactory.fsutils.fetch_pod_status")
 @mock.patch("hostfactory.api.pathlib.Path.exists")
-@mock.patch("hostfactory.api.pathlib.Path.iterdir")
-def test_get_return_requests(mock_iterdir, mock_exists, _mock_fetch_pod_status) -> None:
+@mock.patch("hostfactory.fsutils.iterate_directory")
+def test_get_return_requests(
+    mock_iterate_directory, mock_exists, _mock_fetch_pod_status
+) -> None:
     """Test get_return_requests."""
     machines = [
         {"machineId": "machine-0", "name": "pod1"},
@@ -337,7 +335,7 @@ def test_get_return_requests(mock_iterdir, mock_exists, _mock_fetch_pod_status) 
     ]
 
     mock_exists.return_value = True
-    mock_iterdir.return_value = [
+    mock_iterate_directory.return_value = [
         pathlib.Path("pod1"),
         pathlib.Path("pod2"),
         pathlib.Path("pod4"),

@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "hatchling", "hatch-vcs"
+    "hatchling",
 ]
 build-backend = "hatchling.build"
 
@@ -9,8 +9,10 @@ name = "hostfactory"
 description = "Symphony k8s deployment tools"
 
 readme = "README.md"
-requires-python = ">=3.12,<=3.12.9"
-dynamic = ["version"]
+requires-python = ">=3.12"
+
+# dynamic = ["version"]
+version = "1.0.0"
 
 dependencies = [
     "click>=8",
@@ -23,13 +25,15 @@ dependencies = [
     "rich",
     "wrapt",
     "pydantic",
+    "pydantic-settings",
     "tenacity",
-    "setuptools_scm",
+    "prometheus-client",
+    "sqlalchemy",
+    "psycopg2",
+    "alembic",
+    "fastapi",
+    "uvicorn"
 ]
-
-[tool.hatch.version]
-source = "vcs"
-raw-options = { local_scheme = "no-local-version" }
 
 [project.optional-dependencies]
 testing = [
@@ -38,8 +42,9 @@ testing = [
     "pytest-cov",
     "pytest",
     "mypy",
-    "ruff",
+    "ruff==0.12.2",
     "typos",
+    "httpx"
 ]
 documentation = [
     "sphinx",
@@ -50,9 +55,8 @@ documentation = [
 [project.scripts]
 hostfactory = "hostfactory.cli.hf:run"
 hostfactory-admin = "hostfactory.cli.hfadmin:run"
-
-[tool.setuptools_scm]
-version_scheme = "post-release"
+hostfactory-events = "hostfactory.cli.events_db:run"
+hostfactory-utils = "hostfactory.cli.hfutils:runserver"
 
 [tool.hatch.metadata]
 allow-direct-references = true

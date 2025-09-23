@@ -1,5 +1,6 @@
 exclude = [
     "documentation",
+    "src/hostfactory/alembic/versions/*"
 ]
 
 target-version = "py312"
@@ -57,8 +58,6 @@ select = [
     "PT",
     # flake8-tidy-imports
     "TID",
-    # flake8-type-checking
-    "TC",
     # flake8-use-pathlib
     "PTH",
     # flake8-return
@@ -91,17 +90,9 @@ select = [
 isort.force-single-line = true
 
 ignore = [
-    "D213", # Incompatible with D212
-    "ANN001",
-    "RUF013", # Remove after dealing with new PEP484 requirements
-    "N805", # Replace cls with self if that works
-    "ANN201", # Return types for public functions
-    "B008", # We use Depends in argument defaults for starlette
-    "S603", # Generates many false positives,
-    "UP006", # temporarily for monorepo migration
-    "UP035", # ditto
-    "A005",
-    "S311", # We do not do any cryptography
+    "D203", # incorrect-blank-line-before-class
+    "D213", # multi-line-summary-first-line
+    "ANN001", # missing-type-function-argument
 ]
 
 # Very common error that appears not to be covered by existing Ruff filters
@@ -125,3 +116,6 @@ flake8-tidy-imports.banned-api."ms.version".msg = "ms.version is legacy/deprecat
     "PLR2004",  # magic numbers ok in test assertions
     "PT019",    # allow fixture param without value for unittest mock
 ]
+
+[lint.pylint]
+max-args = 10

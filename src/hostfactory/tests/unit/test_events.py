@@ -14,12 +14,17 @@ Test processing of events.
 """
 
 import json
-import pathlib
 import tempfile
+import time
 from contextlib import closing
 
+import pytest
+
 from hostfactory import events
+from hostfactory import fsutils
 from hostfactory.cli import context
+from hostfactory.impl.watchers.events import PrometheusEventBackend
+from hostfactory.impl.watchers.events import SqliteEventBackend
 
 
 def test_post_events() -> None:
@@ -39,9 +44,7 @@ def test_post_events() -> None:
             )
 
         found = False
-        for eventfile in pathlib.Path(dirname).iterdir():
-            if eventfile.name[0] == ".":
-                continue
+        for eventfile in fsutils.iterate_directory(directory=dirname):
             payload = json.loads(eventfile.read_text())
             assert isinstance(payload, list | tuple)
             assert len(payload) == 1
@@ -57,7 +60,7 @@ def test_post_events() -> None:
 
 def test_sqlite_events_backend() -> None:
     """Test pod events with sqlite."""
-    backend = events.SqliteEventBackend(":memory:")
+    backend = SqliteEventBackend(":memory:")
     backend.post(
         [
             {
@@ -117,3 +120,113 @@ def test_sqlite_events_backend() -> None:
             "event",
             """{"foo": "bar", "hello": "world"}""",
         )
+
+
+def test_sqlite_events_backend_skip_events() -> None:
+    """Test if sqlite backend ignores events if requested."""
+    backend = SqliteEventBackend(":memory:", skip_events=True)
+    backend.post(
+        [
+            {
+                "category": "pod",
+                "id": "abcd-0",
+                "request": "abcd",
+            }
+        ]
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events")
+        result = cur.fetchone()
+        assert result == (
+            "pod",
+            "abcd-0",
+            "request",
+            "abcd",
+        )
+
+    backend.post(
+        [
+            {
+                "category": "event",
+                "id": "abcd-2",
+                "event": {"foo": "bar", "hello": "world"},
+            }
+        ]
+    )
+
+    with closing(backend.conn.cursor()) as cur:
+        cur.execute("SELECT category, id, type, value FROM events WHERE type='event'")
+        result = cur.fetchone()
+        assert result is None
+
+
+def test_prometheus_events_backend() -> None:
+    """Test events with prometheus."""
+    now = time.time()
+    backend = PrometheusEventBackend(port=None, ttl=1000)
+
+    try:
+        backend.post(
+            [
+                {
+                    "category": "pod",
+                    "timestamp": now,
+                    "val": 123,
+                    "label1": "text1",
+                    "hello": "world",
+                }
+            ]
+        )
+
+        for metric in backend.collect():
+            if metric.name not in (
+                "machines_requested",
+                "machines_returned",
+            ):
+                pytest.fail("Backend should hold no custom metrics")
+
+        backend.post(
+            [
+                {
+                    "category": "metric",
+                    "timestamp": now - 500,
+                    "val": 123,
+                    "label1": "text1",
+                    "hello": "world",
+                },
+                {
+                    "category": "metric",
+                    "timestamp": now - 1500,
+                    "var": 123,
+                    "label2": "text2",
+                    "hello": "world",
+                },
+            ]
+        )
+
+        for metric in backend.collect():
+            if metric.name not in (
+                "machines_requested",
+                "machines_returned",
+            ):
+                assert len(metric.samples) == 1
+                sample = metric.samples[0]
+                assert sample.name == "val"
+                assert sample.value == 123
+                assert sample.timestamp == now - 500
+                assert sample.labels == {
+                    "label1": "text1",
+                    "hello": "world",
+                }
+
+        backend.ttl = 100
+
+        for _ in backend.collect():
+            if metric.name not in (
+                "machines_requested",
+                "machines_returned",
+            ):
+                pytest.fail("Backend should hold no more custom metrics")
+    finally:
+        backend.close()

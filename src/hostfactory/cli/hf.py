@@ -25,17 +25,16 @@ import urllib3
 import hostfactory
 from hostfactory import api as hfapi
 from hostfactory import cli
-from hostfactory import events as hfevents
-from hostfactory import hfcleaner
+from hostfactory import hfcron
 from hostfactory import k8sutils
 from hostfactory.cli import context
 from hostfactory.cli import log_handler
+from hostfactory.impl.watchers import events as event_watcher
+from hostfactory.impl.watchers import handlers
 from hostfactory.impl.watchers import kube_watcher
 from hostfactory.impl.watchers import node_watcher
 from hostfactory.impl.watchers import pod_watcher
 from hostfactory.impl.watchers import request
-from hostfactory.impl.watchers import request_machine
-from hostfactory.impl.watchers import return_machine
 
 ON_EXCEPTIONS = hostfactory.handle_exceptions(
     [
@@ -49,6 +48,18 @@ ON_EXCEPTIONS = hostfactory.handle_exceptions(
 )
 
 logger = logging.getLogger(__name__)
+
+# Reusable timeout option for watch commands
+SERVER_TIMEOUT_OPTION = click.option(
+    "--server-timeout-seconds",
+    "-T",
+    "server_timeout_seconds",
+    type=click.IntRange(min=0),
+    default=0,
+    envvar="HF_K8S_SERVER_TIMEOUT_SECONDS",
+    show_default=True,
+    help="Kubernetes watch API timeout seconds (0 = no server-side timeout).",
+)
 
 
 @click.group(name="hostfactory")
@@ -91,7 +102,7 @@ logger = logging.getLogger(__name__)
     type=str,
 )
 @ON_EXCEPTIONS
-def run(proxy, log_level, log_file, workdir, confdir, request_id) -> None:  # noqa PLR0913
+def run(proxy, log_level, log_file, workdir, confdir, request_id) -> None:
     """Entry point for the hostfactory command group.
     Example usage:
     $ hostfactory request-machines <json_file>
@@ -128,6 +139,7 @@ def run(proxy, log_level, log_file, workdir, confdir, request_id) -> None:  # no
         "pods-status",
         "requests",
         "return-requests",
+        "backups",
     ]:
         pathlib.Path(context.GLOBAL.workdir, dirname).mkdir(parents=True, exist_ok=True)
 
@@ -146,7 +158,7 @@ def get_available_templates() -> None:
     cli.output(json.dumps(response, indent=4))
 
 
-def validate_request_file(ctx, param, file_obj):
+def validate_request_file(ctx, param, file_obj) -> None:
     """Validate the request JSON file input."""
     logger.debug(
         "Validating param [%s] with value [%s] in context %s", param.name, file_obj, ctx
@@ -267,7 +279,7 @@ def get_return_requests(json_file) -> None:
 
 @run.command()
 @click.option(
-    "--timeout",
+    "--pod-timeout",
     help="Pod timeout in seconds.",
     type=int,
     default=300,
@@ -284,19 +296,18 @@ def get_return_requests(json_file) -> None:
     is_flag=True,
 )
 @ON_EXCEPTIONS
-def run_cleaner(timeout, run_once, dry_run) -> None:
-    """Run the hostfactory cleaner."""
+def run_cron(pod_timeout, run_once, dry_run) -> None:
+    """Run the hostfactory cron jobs."""
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
-    logger.info("Running cleaner at %s", workdir)
+    logger.info("Running cron at %s", workdir)
     k8s_client = k8sutils.get_kubernetes_client()
-    hfcleaner.run(
+    hfcron.run(
         k8s_client,
         workdir,
-        timeout,
-        None if run_once else context.GLOBAL.cleanup_interval,
+        pod_timeout,
+        run_once,
         dry_run,
-        context.GLOBAL.node_refresh_interval,
     )
 
 
@@ -306,9 +317,11 @@ def watch() -> None:
 
 
 @watch.command(name="pods")
+@SERVER_TIMEOUT_OPTION
 @ON_EXCEPTIONS
-def watch_pods() -> None:
+def watch_pods(server_timeout_seconds: int) -> None:
     """Watch hostfactory pods."""
+    context.GLOBAL.kube_server_timeout_seconds = server_timeout_seconds
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf k8s pods at %s", workdir)
@@ -325,9 +338,8 @@ def watch_request_machines() -> None:
     k8s_client = k8sutils.get_kubernetes_client()
     request.watch(
         request_dir=pathlib.Path(workdir) / "requests",
-        k8s_client=k8s_client,
         workdir=workdir,
-        request_handler=request_machine.handle_machine,
+        request_handler=handlers.make_request_machine_handler(k8s_client),
     )
 
 
@@ -341,16 +353,58 @@ def watch_request_return_machines() -> None:
     k8s_client = k8sutils.get_kubernetes_client()
     request.watch(
         request_dir=pathlib.Path(workdir) / "return-requests",
-        k8s_client=k8s_client,
         workdir=workdir,
-        request_handler=return_machine.handle_machine,
+        request_handler=handlers.make_return_machine_handler(k8s_client),
     )
 
 
 @watch.command(name="events")
 @click.option("--dbfile", help="Events database file.")
+@click.option(
+    "--prometheus-addr",
+    help="Address for prometheus exporter",
+    type=str,
+    default="127.0.0.1",
+    envvar="HF_K8S_PROMETHEUS_ADDR",
+    show_default=True,
+)
+@click.option(
+    "--prometheus-port",
+    help="HTTP port for prometheus exporter",
+    type=int,
+    default=8080,
+    envvar="HF_K8S_PROMETHEUS_PORT",
+    show_default=True,
+)
+@click.option(
+    "--prometheus-ttl",
+    help="TTL for prometheus metrics, in seconds",
+    type=int,
+    default=3600,
+    envvar="HF_K8S_PROMETHEUS_TTL",
+    show_default=True,
+)
+@click.option(
+    "--rotate-events/--no-rotate-events",
+    help="If the events db should be rotated upon SIGHUP.",
+    default=True,
+    envvar="HF_K8S_ROTATE_EVENTS",
+)
+@click.option(
+    "--skip-events/--no-skip-events",
+    help="If the fat events should be saved in the db.",
+    default=True,
+    envvar="HF_K8S_SKIP_EVENTS",
+)
 @ON_EXCEPTIONS
-def events(dbfile) -> None:
+def events(
+    dbfile,
+    prometheus_addr,
+    prometheus_port,
+    prometheus_ttl,
+    rotate_events,
+    skip_events,
+) -> None:
     """Watch for hostfactory events."""
     workdir = context.GLOBAL.workdir
     if not dbfile:
@@ -362,14 +416,22 @@ def events(dbfile) -> None:
     context.GLOBAL.dirname = str(dirname)
     context.GLOBAL.dbfile = dbfile
 
-    logger.info("Watching for hf events at %s", dirname)
-    hfevents.process_events()
+    event_watcher.watch(
+        dirname,
+        prometheus_addr,
+        prometheus_port,
+        prometheus_ttl,
+        rotate_events,
+        skip_events,
+    )
 
 
 @watch.command()
+@SERVER_TIMEOUT_OPTION
 @ON_EXCEPTIONS
-def nodes() -> None:
+def nodes(server_timeout_seconds: int) -> None:
     """Watch for hostfactory nodes."""
+    context.GLOBAL.kube_server_timeout_seconds = server_timeout_seconds
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for hf k8s nodes at %s", workdir)
@@ -377,10 +439,25 @@ def nodes() -> None:
 
 
 @watch.command()
+@SERVER_TIMEOUT_OPTION
 @ON_EXCEPTIONS
-def kube_events() -> None:
+def kube_events(server_timeout_seconds: int) -> None:
     """Watch for kubernetes events."""
+    context.GLOBAL.kube_server_timeout_seconds = server_timeout_seconds
     workdir = context.GLOBAL.workdir
     k8sutils.load_k8s_config(context.GLOBAL.proxy)
     logger.info("Watching for k8s nodes at %s", workdir)
     kube_watcher.watch(workdir=pathlib.Path(workdir))
+
+
+@watch.command()
+@ON_EXCEPTIONS
+def request_io_events() -> None:
+    """Watch for request I/O events."""
+    workdir = context.GLOBAL.workdir
+    logger.info("Watching for request I/O events at %s", workdir)
+    request.watch(
+        workdir=workdir,
+        request_dir=pathlib.Path(workdir) / "requests-io",
+        request_handler=handlers.handle_request_io,
+    )

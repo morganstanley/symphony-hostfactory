@@ -1,39 +1,68 @@
-"""Top level functions for managing requests"""
+"""Morgan Stanley makes this available to you under the Apache License,
+Version 2.0 (the "License"). You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0. See the NOTICE file
+distributed with this work for additional information regarding
+copyright ownership. Unless required by applicable law or agreed
+to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+See the License for the specific language governing permissions and
+limitations under the License. Watch and manage hostfactory machine
+requests and pods in a Kubernetes cluster.
+
+Top level functions for managing requests
+"""
 
 import logging
 import pathlib
 
 import inotify.adapters
 
+from hostfactory import fsutils
+
 logger = logging.getLogger(__name__)
 
 
-def handle_request(k8s_client, workdir, request_handler, request):
-    """Process machine request."""
-    logger.info("Processing machine request: %s", request.name)
-    for machine in request.iterdir():
-        request_handler(k8s_client, workdir, machine)
+def handle_request(
+    workdir,
+    request,
+    request_handler,
+) -> None:
+    """Process event request."""
+    logger.info("Processing event request: %s", request.name)
+    for machine in fsutils.iterate_directory(directory=request):
+        request_handler(workdir, machine)
 
 
-def _process_pending_events(request_dir, k8s_client, workdir, request_handler) -> None:
+def _process_pending_events(
+    workdir,
+    request_dir,
+    request_handler,
+) -> None:
     """Process all unfinished requests."""
     # TODO: consider removing .files in the cleanup
 
-    for request in request_dir.iterdir():
-        if (
-            request.is_dir()
-            and not request.name.startswith(".")
-            and not request.joinpath(".processed").exists()
-        ):
-            handle_request(k8s_client, workdir, request_handler, request)
-            request.joinpath(".processed").touch()
+    for request in fsutils.iterate_directory(
+        directory=request_dir, directories_only=True, exclude_dir_with_file=".processed"
+    ):
+        logger.info("Processing pending request: %s", request.name)
+        handle_request(workdir, request, request_handler)
+        request.joinpath(".processed").touch()
 
 
-def watch(request_dir, k8s_client, workdir, request_handler) -> None:
+def watch(
+    workdir,
+    request_dir,
+    request_handler,
+) -> None:
     """Watch directory for events, invoke callback on event."""
     request_dir.mkdir(parents=True, exist_ok=True)
 
-    _process_pending_events(request_dir, k8s_client, workdir, request_handler)
+    _process_pending_events(
+        workdir,
+        request_dir,
+        request_handler,
+    )
 
     dirwatch = inotify.adapters.Inotify()
 
@@ -51,5 +80,9 @@ def watch(request_dir, k8s_client, workdir, request_handler) -> None:
         request = pathlib.Path(path) / filename
         if request.is_dir():
             # TODO: error handling? Exit on error and allow supvervisor to restart?
-            handle_request(k8s_client, workdir, request_handler, request)
+            handle_request(
+                workdir,
+                request,
+                request_handler,
+            )
             request.joinpath(".processed").touch()
