@@ -1,5 +1,5 @@
 annotated-types==0.7.0
-awscli2
+awscli
 boto3==1.35.30
 botocore==1.35.30
 brotlicffi==1.1.0.0
