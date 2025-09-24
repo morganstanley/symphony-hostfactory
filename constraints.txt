@@ -10,6 +10,7 @@ charset-normalizer==3.3.2
 click==8.1.7
 coverage==7.6.1
 editables==0.5
+fastapi==0.117.1
 google-auth==2.35.0
 hatchling==1.25.0
 idna==3.10
