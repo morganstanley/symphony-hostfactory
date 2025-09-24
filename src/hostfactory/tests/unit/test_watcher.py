@@ -24,9 +24,8 @@ import inotify.adapters
 import inotify.constants
 
 from hostfactory import fsutils
+from hostfactory.impl.watchers import handlers
 from hostfactory.impl.watchers import request
-from hostfactory.impl.watchers import request_machine
-from hostfactory.impl.watchers import return_machine
 from hostfactory.tests import get_workdir
 
 
@@ -49,7 +48,7 @@ def _read_all_events(inotify_inst) -> list:
     "hostfactory.impl.watchers.request.inotify.adapters.Inotify",
     return_value=mock.MagicMock(),
 )
-@mock.patch("hostfactory.impl.watchers.request_machine._create_pod")
+@mock.patch("hostfactory.impl.watchers.handlers._create_pod")
 class TestRequestMachinesWatcher(unittest.TestCase):
     """Validate Hostfactory request machines watcher"""
 
@@ -85,9 +84,8 @@ class TestRequestMachinesWatcher(unittest.TestCase):
         mock_k8s_client = mock.MagicMock()
         request._process_pending_events(
             request_dir=self.workdir / "requests",
-            k8s_client=mock_k8s_client,
             workdir=self.workdir,
-            request_handler=request_machine.handle_machine,
+            request_handler=handlers.make_request_machine_handler(mock_k8s_client),
         )
 
         assert mock_create_pod.call_count == 3
@@ -102,7 +100,7 @@ class TestRequestMachinesWatcher(unittest.TestCase):
     "hostfactory.impl.watchers.request.inotify.adapters.Inotify",
     return_value=mock.MagicMock(),
 )
-@mock.patch("hostfactory.impl.watchers.return_machine._delete_pod")
+@mock.patch("hostfactory.impl.watchers.handlers._delete_pod")
 class TestRequestReturnMachinesWatcher(unittest.TestCase):
     """Validate Hostfactory request return machines watcher"""
 
@@ -143,9 +141,8 @@ class TestRequestReturnMachinesWatcher(unittest.TestCase):
         mock_k8s_client = mock.MagicMock()
         request._process_pending_events(
             request_dir=self.workdir / "return-requests",
-            k8s_client=mock_k8s_client,
             workdir=self.workdir,
-            request_handler=return_machine.handle_machine,
+            request_handler=handlers.make_return_machine_handler(mock_k8s_client),
         )
 
         assert mock_delete_pod.call_count == 3

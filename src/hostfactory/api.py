@@ -17,13 +17,10 @@ import json
 import logging
 import pathlib
 import tempfile
-from typing import Tuple
 
 from hostfactory import events as hfevents
 from hostfactory import fsutils
 from hostfactory import validator as hfvalidator
-
-_HF_K8S_LABEL_KEY = "symphony/hostfactory-reqid"
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +103,7 @@ def _resolve_return_result(machine_status: str) -> str:
     return "succeed" if machine_status == "terminated" else "executing"
 
 
-def _resolve_machine_status(pod_status: str, is_return_req: bool) -> Tuple[str, str]:
+def _resolve_machine_status(pod_status: str, is_return_req: bool) -> tuple[str, str]:
     """Resolve the machine status based on the pod status.
     machine_status : Status of machine.
     Expected values: running, terminated
@@ -184,14 +181,14 @@ def _find_podspec_path(templates: pathlib.Path, template_id: str) -> pathlib.Pat
     raise ValueError("Template Id: %s not found in templates file.", template_id)
 
 
-def get_available_templates(templates):
+def get_available_templates(templates) -> dict:
     """Validates and returns the hostfactory templates file."""
     logger.info("Getting available templates: %s", templates)
 
     return _get_templates(pathlib.Path(templates))
 
 
-def request_machines(workdir, templates, template_id, count, request_id):
+def request_machines(workdir, templates, template_id, count, request_id) -> dict:
     """Request machines based on the provided hostfactory input JSON file.
 
     Generate unique hostfactory request id, create a directory for the request.
@@ -240,7 +237,7 @@ def request_machines(workdir, templates, template_id, count, request_id):
     }
 
 
-def get_request_status(workdir, hf_req_ids):
+def get_request_status(workdir, hf_req_ids) -> dict:
     """Get the status of hostfactory requests.
 
     For each request, first check if the request is a return request. If it is,
@@ -257,7 +254,7 @@ def get_request_status(workdir, hf_req_ids):
     """
     workdir_path = pathlib.Path(workdir)
 
-    response = {"requests": []}
+    response: dict = {"requests": []}
 
     logger.info("Getting request status: %s", hf_req_ids)
     with hfevents.EventsBuffer() as events:
@@ -273,10 +270,7 @@ def get_request_status(workdir, hf_req_ids):
             machines_dir = _get_machines_dir(workdir_path, request_id)
             item_count = 0
 
-            for file_path in machines_dir.iterdir():
-                if file_path.name.startswith("."):
-                    continue
-
+            for file_path in fsutils.iterate_directory(directory=machines_dir):
                 item_count += 1
 
                 podname = file_path.name
@@ -364,7 +358,7 @@ def get_request_status(workdir, hf_req_ids):
     return response
 
 
-def request_return_machines(workdir, machines, request_id):
+def request_return_machines(workdir, machines, request_id) -> dict:
     """Request to return machines based on the provided hostfactory input JSON."""
     workdir_path = pathlib.Path(workdir)
     with hfevents.EventsBuffer() as events:
@@ -396,15 +390,13 @@ def request_return_machines(workdir, machines, request_id):
     }
 
 
-def get_return_requests(workdir, machines):
+def get_return_requests(workdir, machines) -> dict:
     """Get the status of CSP claimed hosts."""
     known = {machine["name"] for machine in machines}
     pods_dir = pathlib.Path(workdir) / "pods"
     workdir_path = pathlib.Path(workdir)
     actual = set()
-    for file_path in pods_dir.iterdir():
-        if file_path.name.startswith("."):
-            continue
+    for file_path in fsutils.iterate_directory(directory=pods_dir):
         if fsutils.fetch_pod_status(workdir_path, file_path.name) == "deleted":
             continue
 

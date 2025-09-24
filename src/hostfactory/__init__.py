@@ -16,23 +16,21 @@ Common utilities.
 import functools
 import json
 import logging
-import pathlib
-import random
+import secrets
 import string
 import sys
 import tempfile
 import traceback
+from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
-from typing import Callable
-from typing import Tuple
 from typing import TypeVar
 
 import click
 
 _DecoratedFuncT = TypeVar("_DecoratedFuncT", bound=Callable[..., Any])
-type _ExceptionHandler = Tuple[type[Exception], None | str | Callable[[Exception], str]]
+type _ExceptionHandler = tuple[type[Exception], None | str | Callable[[Exception], str]]
 
 logger = logging.getLogger(__name__)
 EXIT_CODE_DEFAULT = 1
@@ -44,30 +42,9 @@ def generate_short_uuid() -> str:
         str: A short UUID string of length 12.
     """
     alphabet = string.ascii_lowercase + string.digits
-    return random.choice(string.ascii_lowercase) + "".join(
-        random.choices(alphabet, k=11)
+    return secrets.choice(string.ascii_lowercase) + "".join(
+        [secrets.choice(alphabet) for _ in range(11)]
     )
-
-
-def atomic_write(data, dst):
-    """Atomically create a file with given content"""
-    if not isinstance(data, bytes):
-        if not isinstance(data, str):
-            data = json.dumps(data)
-        data = data.encode("utf-8")
-    dst = pathlib.Path(dst)
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix=".",
-            dir=dst.parent,
-            delete=False,
-        ) as tf:
-            tf.write(data)
-            tf.flush()
-            pathlib.Path.rename(pathlib.Path(tf.name), dst)
-    except OSError as exc:
-        logger.exception("Exception occurred: %s", exc)
-        raise RuntimeError from exc
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -75,7 +52,7 @@ class DateTimeEncoder(json.JSONEncoder):
     This encoder is used to serialize `datetime` objects into ISO 8601 format.
     """
 
-    def default(self, o):
+    def default(self: "DateTimeEncoder", o):  # noqa: ANN201
         """Convert the given date object to a JSON-serializable format."""
         if isinstance(o, datetime):
             return int(o.timestamp())
@@ -93,11 +70,11 @@ def handle_exceptions(
 ) -> Callable[[_DecoratedFuncT], _DecoratedFuncT]:
     """Decorator that will handle exceptions and output friendly messages."""
 
-    def wrap(f):  # noqa: ANN202
+    def wrap(f: _DecoratedFuncT) -> _DecoratedFuncT:
         """Returns decorator that wraps/handles exceptions."""
         exclist_copy = list(exclist)
 
-        def wrapped_f(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        def wrapped_f(*args, **kwargs) -> None:  # noqa: ANN003, ANN002
             """Wrapped function."""
             if not exclist_copy:
                 f(*args, **kwargs)
@@ -120,7 +97,7 @@ def handle_exceptions(
                     sys.exit(EXIT_CODE_DEFAULT)
 
         @functools.wraps(f)
-        def _handle_any(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        def _handle_any(*args, **kwargs) -> None:  # noqa: ANN003, ANN002
             """Default exception handler."""
             try:
                 return wrapped_f(*args, **kwargs)

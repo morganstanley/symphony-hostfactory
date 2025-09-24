@@ -24,6 +24,7 @@
 *.iml
 *.ipr
 *.iws
+.nfs*
 .idea_modules/
 out/
 

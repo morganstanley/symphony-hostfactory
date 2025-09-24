@@ -1,9 +1,6 @@
 {
   inputs = {
-    nixpkgs = {
-      type = "indirect";
-      id = "nixpkgs";
-    };
+    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
   };
   outputs =
     {
@@ -14,7 +11,7 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       flakePkgs = pkgs.callPackages ./. { };
-      defaultPackage = flakePkgs.devshell;
+      defaultPackage = flakePkgs.hostfactory;
     in
     {
       defaultPackage.${system} = defaultPackage;

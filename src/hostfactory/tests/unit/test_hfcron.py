@@ -35,11 +35,14 @@ def _run_cli(module, args) -> click.testing.Result:
     )
 
 
+@mock.patch("hostfactory.k8sutils.get_namespace")
 @mock.patch("hostfactory.k8sutils.get_kubernetes_client", return_value=MagicMock())
 @mock.patch("hostfactory.k8sutils.load_k8s_config", return_value=None)
-@mock.patch("hostfactory.hfcleaner._delete_k8s_pod")
-@mock.patch("hostfactory.hfcleaner._is_timeout_reached")
-class TestHFCleaner(unittest.TestCase):
+@mock.patch("hostfactory.hfcron.CleanupPodsTask._delete_k8s_pod")
+@mock.patch("hostfactory.hfcron.CleanupPodsTask._is_timeout_reached")
+@mock.patch("hostfactory.hfcron.RefreshPodsTask")
+@mock.patch("hostfactory.hfcron.RefreshNodesTask")
+class TestHFCron(unittest.TestCase):
     """Validate Hostfactory cleaner process"""
 
     def setUp(self) -> None:
@@ -53,34 +56,40 @@ class TestHFCleaner(unittest.TestCase):
         """Tear down the test environment"""
         shutil.rmtree(self.workdir)
 
-    def test_cleaner_timeout(
+    def test_pod_timeout(
         self,
+        _mock_nodes_task,
+        _mock_pods_task,
         mock_timeout,
         mock_delete,
         _mock_load_config,
         _mock_k8sclient,
+        _mock_namespace,
     ) -> None:
         """Test cleaner process"""
         mock_timeout.return_value = True
         result = _run_cli(
-            hostfactory, ["--workdir", self.workdir, "run-cleaner", "--run-once"]
+            hostfactory, ["--workdir", self.workdir, "run-cron", "--run-once"]
         )
         assert result.exit_code == 0, result.output
 
-        mock_delete.assert_called_once_with("test-pod-id", _mock_k8sclient())
+        mock_delete.assert_called_once_with("test-pod-id")
         assert (self.pods_dir / "test-pod-id").readlink().name == "deleted"
 
-    def test_cleaner_no_timeout(
+    def test_pod_no_timeout(
         self,
+        _mock_nodes_task,
+        _mock_pods_task,
         mock_timeout,
         mock_delete,
         _mock_load_config,
         _mock_k8sclient,
+        _mock_namespace,
     ) -> None:
         """Test cleaner process"""
         mock_timeout.return_value = False
         result = _run_cli(
-            hostfactory, ["--workdir", self.workdir, "run-cleaner", "--run-once"]
+            hostfactory, ["--workdir", self.workdir, "run-cron", "--run-once"]
         )
         assert result.exit_code == 0, result.output
 
