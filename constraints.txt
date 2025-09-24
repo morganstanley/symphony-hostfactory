@@ -13,6 +13,7 @@ editables==0.5
 fastapi==0.117.1
 google-auth==2.35.0
 hatchling==1.25.0
+httpx==0.28.1
 idna==3.10
 iniconfig==2.0.0
 inotify==0.2.10
