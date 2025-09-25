@@ -4,14 +4,17 @@
   nix-gitignore,
 }:
 let
-  shells = callPackages ./shells.nix { };
-
   py = python312;
+  makevenv = ./makevenv.sh;
 
   hostfactory = py.pkgs.buildPythonPackage rec {
     pname = "hostfactory";
     version = "1.0";
     pyproject = true;
+
+    shellHook = ''
+    source ${makevenv}
+    '';
 
     # TODO: move source up one level, otherwise app is rebuilt every time
     #       there is a change in root level expressions.
@@ -35,11 +38,14 @@ let
       hatchling
       pytest-cov
       mypy
+      httpx
     ];
 
     nativeCheckInputs = with py.pkgs; [
       pytestCheckHook
       pytest-mock
+      ruff
+      mypy
     ];
 
     propagatedBuildInputs = with py.pkgs; [
@@ -52,8 +58,27 @@ let
       wrapt
       rich
       pydantic
+      pydantic-settings
       tenacity
+      prometheus_client
+      sqlalchemy
+      psycopg2
+      alembic
+      fastapi
+      uvicorn
     ];
+
+    installCheckPhase = ''
+      echo Running pytest
+      ${py.interpreter} -m pytest
+      echo Running ruff check
+      ruff check
+      echo Running ruff format --check
+      ruff format --check
+      echo $unning mypy
+      mypy $src/src
+      echo Done
+    '';
   };
 in
-{ inherit hostfactory; } // shells
+{ inherit hostfactory; }

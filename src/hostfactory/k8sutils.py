@@ -17,6 +17,7 @@ import functools
 import logging
 import os
 import pathlib
+from datetime import datetime
 from http import HTTPStatus
 
 import kubernetes
@@ -27,6 +28,8 @@ from tenacity import retry_if_exception_type
 from tenacity import retry_if_result
 from tenacity import stop_after_attempt
 from tenacity import wait_exponential
+
+from hostfactory.cli import context
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,6 @@ RETRYABLE_HTTP_ERROR_CODES = (
 RETRYABLE_EXCEPTIONS = (
     kubernetes.client.exceptions.ApiException,
     urllib3.exceptions.ReadTimeoutError,
-    urllib3.exceptions.ProtocolError,
 )
 
 
@@ -82,7 +84,7 @@ def get_kubernetes_client() -> kubernetes.client.CoreV1Api:
     reraise=True,
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
-def load_k8s_config(proxy_url: str = None) -> None:
+def load_k8s_config(proxy_url: str | None = None) -> None:
     """Load Kubernetes Credentials."""
     if is_inside_pod():
         # From Inside a Pod
@@ -125,16 +127,6 @@ def get_namespace() -> str:
     return namespace
 
 
-@retry(
-    wait=wait_exponential(),
-    stop=stop_after_attempt(5),
-    retry=(
-        retry_if_exception_type(RETRYABLE_EXCEPTIONS)
-        | retry_if_result(lambda resp: resp in RETRYABLE_HTTP_ERROR_CODES)
-    ),
-    reraise=True,
-    before_sleep=before_sleep_log(logger, logging.WARNING),
-)
 def watch_pods(
     label_selector,
     handler,
@@ -142,43 +134,57 @@ def watch_pods(
     workdir: pathlib.Path,
     _postprocess_event,
     _event_path,
-):
-    """Watch for pods based on label selector."""
-    _watch_events(
-        get_kubernetes_client().list_namespaced_pod,
-        handler,
-        workdir,
-        _postprocess_event,
-        _event_path,
-        namespace=namespace,
-        label_selector=label_selector,
-        timeout_seconds=0,
-    )
+) -> None:
+    """Watch for pods based on label selector with per-cycle retry reset."""
+    resource_version = "0"
+    while True:
+        resource_version = _watch_events(
+            get_kubernetes_client().list_namespaced_pod,
+            handler,
+            workdir,
+            _postprocess_event,
+            _event_path,
+            resource_version,
+            namespace=namespace,
+            label_selector=label_selector,
+            timeout_seconds=context.GLOBAL.kube_server_timeout_seconds,
+        )
 
 
-@retry(
-    wait=wait_exponential(),
-    stop=stop_after_attempt(5),
-    retry=(
-        retry_if_exception_type(RETRYABLE_EXCEPTIONS)
-        | retry_if_result(lambda resp: resp in RETRYABLE_HTTP_ERROR_CODES)
-    ),
-    reraise=True,
-    before_sleep=before_sleep_log(logger, logging.WARNING),
-)
 def watch_nodes(
     label_selector, handler, workdir: pathlib.Path, _postprocess_event, _event_path
-):
-    """Watch for nodes based on label selector."""
-    _watch_events(
-        get_kubernetes_client().list_node,
-        handler,
-        workdir,
-        _postprocess_event,
-        _event_path,
-        label_selector=label_selector,
-        timeout_seconds=0,
-    )
+) -> None:
+    """Watch for nodes based on label selector with per-cycle retry reset."""
+    resource_version = "0"
+    while True:
+        resource_version = _watch_events(
+            get_kubernetes_client().list_node,
+            handler,
+            workdir,
+            _postprocess_event,
+            _event_path,
+            resource_version,
+            label_selector=label_selector,
+            timeout_seconds=context.GLOBAL.kube_server_timeout_seconds,
+        )
+
+
+def watch_kube_events(
+    field_selector, handler, workdir: pathlib.Path, _postprocess_event, _event_path
+) -> None:
+    """Watch for Kubernetes events with per-cycle retry reset."""
+    resource_version = "0"
+    while True:
+        resource_version = _watch_events(
+            get_kubernetes_client().list_event_for_all_namespaces,
+            handler,
+            workdir,
+            _postprocess_event,
+            _event_path,
+            resource_version,
+            field_selector=field_selector,
+            timeout_seconds=context.GLOBAL.kube_server_timeout_seconds,
+        )
 
 
 @retry(
@@ -191,57 +197,56 @@ def watch_nodes(
     reraise=True,
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
-def watch_kube_events(
-    field_selector, handler, workdir: pathlib.Path, _postprocess_event, _event_path
-):
-    """Watch for events based on label selector."""
-    _watch_events(
-        get_kubernetes_client().list_event_for_all_namespaces,
-        handler,
-        workdir,
-        _postprocess_event,
-        _event_path,
-        field_selector=field_selector,
-        timeout_seconds=0,
-    )
-
-
 def _watch_events(
     api_call,
     handler,
     workdir: pathlib.Path,
     _postprocess_event,
     _event_path,
+    resource_version: str,
     **kwargs: dict,
-) -> None:
-    """Watch for events based on stream."""
-    resource_version = "0"
+) -> str:
+    """Perform a single watch stream cycle."""
+    kwargs["resource_version"] = resource_version
+    stream = kubernetes.watch.Watch().stream(api_call, **kwargs)
 
-    while True:
-        kwargs["resource_version"] = resource_version
-        stream = kubernetes.watch.Watch().stream(
-            api_call,
-            **kwargs,
+    try:
+        for event in stream:
+            handler(workdir, _postprocess_event, _event_path, event)
+    except kubernetes.client.exceptions.ApiException as exc:
+        if exc.status != K8S_RESOURCE_VERSION_MISMATCH_CODE:
+            raise
+        obj = event["object"] if isinstance(event, dict) and "object" in event else None
+        rv = "0"
+        if obj is not None and getattr(obj, "metadata", None):
+            rv = getattr(obj.metadata, "resource_version", None) or "0"
+        resource_version = rv
+        logger.warning(
+            "Restarting watcher due to resourceVersion mismatch. "
+            "Using resourceVersion: %s",
+            resource_version,
         )
+        return resource_version
+    except urllib3.exceptions.ProtocolError as exc:
+        logger.warning(
+            "Protocol error (%s). Soft restart from resource_version=%s",
+            exc,
+            resource_version,
+        )
+        return resource_version
+    except Exception:
+        raise
 
-        try:
-            for event in stream:
-                handler(workdir, _postprocess_event, _event_path, event)
-        except kubernetes.client.exceptions.ApiException as exc:
-            if exc.status != K8S_RESOURCE_VERSION_MISMATCH_CODE:
-                raise
-            resource_version = event["object"].metadata.resource_version
-            logger.warning(
-                "Restarting watcher due to resourceVersion mismatch."
-                " Using resourceVersion: %s",
-                resource_version,
-            )
-
-        logger.warning("End of events stream. Restarting watcher.")
+    logger.warning(
+        "End of events stream. Soft restart from resource_version=%s", resource_version
+    )
+    return resource_version
 
 
 def _parse_cpu_quantity(quantity: str) -> float:
     """Parse the CPU quantity."""
+    if not quantity:
+        return 0.0
     if quantity.endswith("m"):
         return int(quantity[:-1]) / 1000  # Convert millicores to cores
     return float(quantity)  # Assume the quantity is already in cores
@@ -249,6 +254,8 @@ def _parse_cpu_quantity(quantity: str) -> float:
 
 def _parse_memory_quantity(quantity: str) -> int:  # noqa: PLR0911
     """Parse the memory quantity."""
+    if not quantity:
+        return 0
     if quantity.endswith("Ki"):
         return int(quantity[:-2]) * 1024  # Convert Ki to bytes
     if quantity.endswith("Mi"):
@@ -352,7 +359,108 @@ def get_pod_container_statuses(pod) -> dict:
     return container_statuses
 
 
-def get_node_conditions(node) -> dict:
+class Pod:
+    """Dataclass for pod objects used in pods state"""
+
+    def __init__(self: "Pod", obj) -> None:
+        """init the pod from either API object or plain dict"""
+        try:  # noqa: SIM105
+            obj = obj.to_dict()
+        except AttributeError:
+            pass
+
+        metadata = obj["metadata"]
+        spec = obj["spec"]
+        status = obj["status"]
+        labels = metadata["labels"]
+        self.uid = metadata["uid"]
+        self.pod_name = metadata["name"]
+        self.pod_type = labels.get("app.kubernetes.io/name", "")
+        self.namespace = metadata["namespace"]
+        self.creation_timestamp = metadata["creation_timestamp"]
+        self.deletion_timestamp = metadata.get("deletion_timestamp")
+        self.version = int(metadata["resource_version"])
+        self.node_name = spec["node_name"]
+        self.node_ip = status.get("host_ip")
+        self.pod_ip = status.get("pod_ip")
+        self.phase = status["phase"].lower()
+        self.start_timestamp = status.get("start_time", 0)
+        if self.start_timestamp:
+            self.start_time = datetime.fromtimestamp(self.start_timestamp).isoformat()
+        else:
+            self.start_time = ""
+        if self.deletion_timestamp:
+            self.end_time = datetime.fromtimestamp(self.deletion_timestamp).isoformat()
+        else:
+            self.end_time = ""
+        self.cpu = 0.0
+        self.memory = 0
+        self.image = ""
+        self.restart_count = 0
+        for container in spec.get("containers", ()):
+            if not self.image:
+                self.image = container.get("image", "")
+            resources = container["resources"]
+            resources = resources.get("requests") or resources.get("limits") or {}
+            self.cpu += _parse_cpu_quantity(resources.get("cpu"))
+            self.memory += _parse_memory_quantity(resources.get("memory"))
+        for container_status in status.get("container_statuses") or ():
+            self.restart_count += container_status.get("restart_count", 0)
+        self.memory = self.memory / 1048576
+        self.conditions = status.get("conditions") or ()
+
+
+class Node:
+    """Dataclass for node objects used in nodes state"""
+
+    def __init__(self: "Node", obj) -> None:
+        """init the node from either API object or plain dict"""
+        try:  # noqa: SIM105
+            obj = obj.to_dict()
+        except AttributeError:
+            pass
+
+        metadata = obj["metadata"]
+        status = obj["status"]
+        labels = metadata["labels"]
+        self.uid = metadata["uid"]
+        self.node_name = metadata["name"]
+        self.creation_timestamp = metadata["creation_timestamp"]
+        self.deletion_timestamp = metadata.get("deletion_timestamp")
+        self.instance_type = labels.get("node.kubernetes.io/instance-type", "")
+        self.capacity_type = (
+            (
+                labels.get("karpenter.sh/capacity-type", "")
+                or labels.get("eks.amazonaws.com/capacityType", "")
+            )
+            .lower()
+            .replace("_", "-")
+        )
+        self.zone_id = labels.get("topology.k8s.aws/zone-id", "")
+        self.version = int(metadata["resource_version"])
+        self.node_ip = ""
+        for addr in status.get("addresses", ()):
+            if self.node_ip:
+                break
+            if addr.get("type") == "InternalIP":
+                self.node_ip = addr.get("address", "")
+        if self.creation_timestamp:
+            self.start_time = datetime.fromtimestamp(
+                self.creation_timestamp
+            ).isoformat()
+        else:
+            self.start_time = ""
+        if self.deletion_timestamp:
+            self.end_time = datetime.fromtimestamp(self.deletion_timestamp).isoformat()
+        else:
+            self.end_time = ""
+        resources = status.get("capacity") or status.get("allocatable") or {}
+        self.cpu = _parse_cpu_quantity(resources.get("cpu"))
+        self.memory = _parse_memory_quantity(resources.get("memory")) / 1048576
+        self.conditions = status.get("conditions") or ()
+
+
+def get_node_conditions(node: kubernetes.client.V1Node) -> dict:
     """Get the conditions of a node.
 
     Args:
@@ -372,7 +480,7 @@ def get_node_conditions(node) -> dict:
     return node_conditions
 
 
-def get_node_memory_resources(node) -> dict:
+def get_node_memory_resources(node: kubernetes.client.V1Node) -> dict:
     """Get the memory resources of a node.
 
     Args:
@@ -392,7 +500,7 @@ def get_node_memory_resources(node) -> dict:
     }
 
 
-def get_node_cpu_resources(node) -> dict:
+def get_node_cpu_resources(node: kubernetes.client.V1Node) -> dict:
     """Get the CPU resources of a node.
 
     Args:

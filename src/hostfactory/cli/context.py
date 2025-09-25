@@ -17,7 +17,7 @@ Captures common cli options, allows to retrieve them later
 class Context:
     """Global cli context"""
 
-    def __init__(self) -> None:
+    def __init__(self: "Context") -> None:
         """Initialize context."""
         self.debug = False
         self.workdir = None
@@ -30,19 +30,20 @@ class Context:
         self.cleanup_interval = 30
         self.node_refresh_interval = 300
         self.request_id = None
+        self.kube_server_timeout_seconds = 0
 
     @property
-    def default_workdir(self) -> str:
+    def default_workdir(self: "Context") -> str:
         """Get the default workdir."""
         return self.workdir if self.workdir else "/tmp/hostfactory"  # noqa: S108
 
     @property
-    def default_templates_filename(self) -> str:
+    def default_templates_filename(self: "Context") -> str:
         """Get the default templates filename."""
         return "k8sprov_templates.json"
 
     @property
-    def default_machine_timeout(self) -> int:
+    def default_machine_timeout(self: "Context") -> int:
         """Get the default machine timeout."""
         return 5
 

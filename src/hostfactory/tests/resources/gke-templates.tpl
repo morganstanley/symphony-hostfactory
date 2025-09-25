@@ -18,7 +18,7 @@
                     "X86_64"
                 ]
             },
-            "podSpec": "documentation/config_example/pod-spec-sample.yml"
+            "podSpec": "{{ podSpec }}"
         }
     ]
 }

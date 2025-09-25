@@ -28,7 +28,7 @@ import click.testing
 import pytest
 import yaml
 
-from hostfactory.cli.hf import run as hostfactory
+from hostfactory.cli.hf import run as hf
 from hostfactory.cli.hfadmin import run as hfadmin
 from hostfactory.impl.hfadmin import delete_pods_in_namespace
 from hostfactory.impl.hfadmin import drain_node_in_namespace
@@ -84,7 +84,7 @@ def _run_cli(module: str, args: list) -> click.testing.Result:
 
 
 def run_hostfactory_command(
-    command: str, json_in: str, confdir: str = None
+    command: str, json_in: str, confdir: str | None = None
 ) -> click.testing.Result:
     """Run a hostfactory command"""
     logger.info("Json in is %s", json_in)
@@ -100,7 +100,7 @@ def run_hostfactory_command(
             hf_args = ["--confdir", confdir, *hf_args]
 
         result = _run_cli(
-            hostfactory,
+            hf,
             hf_args,
         )
 
@@ -122,13 +122,13 @@ def run_hostfactory_admin_command(command: str) -> click.testing.Result:
 
 def run_pod_watch_command() -> click.testing.Result:
     """Run pod watcher command"""
-    return _run_cli(hostfactory, ["--workdir", get_workdir(), "watch", "pods"])
+    return _run_cli(hf, ["--workdir", get_workdir(), "watch", "pods"])
 
 
 def run_request_machine_command() -> click.testing.Result:
     """Run request-machines watcher command"""
     return _run_cli(
-        hostfactory,
+        hf,
         [
             "--workdir",
             get_workdir(),
@@ -141,7 +141,7 @@ def run_request_machine_command() -> click.testing.Result:
 def run_request_return_command() -> click.testing.Result:
     """Run request-return-machines watcher command"""
     return _run_cli(
-        hostfactory,
+        hf,
         ["--workdir", get_workdir(), "watch", "request-return-machines"],
     )
 
@@ -149,12 +149,12 @@ def run_request_return_command() -> click.testing.Result:
 def run_event_command() -> click.testing.Result:
     """Run a pod watch command"""
     return _run_cli(
-        hostfactory,
-        ["--workdir", get_workdir(), "watch", "events"],
+        hf,
+        ["--workdir", get_workdir(), "watch", "events", "--no-rotate-events"],
     )
 
 
-def run_custom_hostfactory_test(  # noqa: C901,PLR0912, PLR0913
+def run_custom_hostfactory_test(  # noqa: C901, PLR0912
     test_spec: dict,
     flavor: str,
     run_hostfactory_pods,  # noqa: ARG001
